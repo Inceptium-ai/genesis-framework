@@ -113,6 +113,7 @@ def _parse_counts(output: str) -> dict[str, int]:
 @register_provider
 class PytestProvider(Provider):
     key = "pytest"
+    ecosystem = "python"  # label the unit-tests gate uses in its merged summary
     description = "Run pytest in the target repo and report pass/fail counts."
 
     def is_available(self, ctx: GateContext) -> bool:

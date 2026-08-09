@@ -2,7 +2,32 @@
 
 Make any repository agent-ready, and keep AI-generated changes governed.
 
+## Install
+
 ```bash
+pip install genesis-cli       # or: uv tool install genesis-cli
+genesis --version
+```
+
+Python 3.12+. `genesis-gates` (the engine) comes along as a dependency; there is
+nothing else to install and no API key to configure.
+
+> **Status:** PyPI publication happens at the first tagged release (`v0.1.0`),
+> driven by `.github/workflows/release.yml` in the
+> [genesis-framework](https://github.com/Inceptium-ai/genesis-framework)
+> repository. Until that tag lands, install from source:
+
+```bash
+# from a clone of the monorepo / framework repo
+uv sync && uv run genesis adopt .
+# or, without cloning:
+pip install "git+https://github.com/Inceptium-ai/genesis-framework#subdirectory=packages/genesis-cli"
+```
+
+## Commands
+
+```bash
+genesis --version             # installed version
 genesis adopt [path]          # audit a repo: score, gaps, AGENTS.md draft
 genesis adopt . --write       # also install AGENTS.md into the repo root
 genesis adopt . --review      # add the AI second-reader (see below)

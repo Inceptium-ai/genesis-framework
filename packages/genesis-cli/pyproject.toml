@@ -2,11 +2,44 @@
 name = "genesis-cli"
 version = "0.1.0"
 description = "Genesis Agent Workbench CLI — make any repo agent-ready and keep AI-generated changes governed."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Inceptium", email = "opensource@inceptium.ai" }]
+keywords = [
+    "agents",
+    "ai",
+    "ci",
+    "code-quality",
+    "devsecops",
+    "governance",
+    "sarif",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
-    "genesis-gates",
+    # Must stay a REAL version requirement: `[tool.uv.sources]` below is a
+    # dev-only workspace override and is not written into published metadata,
+    # so this is what `pip install genesis-cli` resolves against on PyPI.
+    "genesis-gates>=0.1.0",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Inceptium-ai/genesis-framework"
+Repository = "https://github.com/Inceptium-ai/genesis-framework"
+Documentation = "https://github.com/Inceptium-ai/genesis-framework/blob/main/docs/architecture.md"
+Issues = "https://github.com/Inceptium-ai/genesis-framework/issues"
+Changelog = "https://github.com/Inceptium-ai/genesis-framework/blob/main/CHANGELOG.md"
 
 [project.scripts]
 genesis = "genesis_cli.main:main"
@@ -18,5 +51,11 @@ genesis-gates = { workspace = true }
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.sdist]
+include = ["src", "action", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/genesis_cli"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"README.md" = "genesis_cli/README.md"

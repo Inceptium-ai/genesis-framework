@@ -176,6 +176,93 @@ schemas, so core evolution cannot silently break the platform.
 | [`readiness-report.schema.json`](../packages/genesis-gates/contracts/readiness-report.schema.json) | Readiness Report — the `genesis adopt` output: score/grade/categories, gate results, completeness gaps, env reconciliation, structure facts |
 | [`gateconfig.schema.json`](../packages/genesis-gates/contracts/gateconfig.schema.json) | Gate Config — the per-repo "how": provider selection, severity thresholds, timeouts, BYO command/report/external providers |
 
+## Extending Genesis
+
+There are two extension surfaces, and the split matters: a **gate** declares
+*what* must be checked (`secret-scan`) and owns the policy; a **provider** is
+one concrete *how* to produce that check's findings (gitleaks, or a BYO
+`command`/`report`/`external`). Adding a scanner is usually a provider, not a
+gate.
+
+```python
+# my_plugin/gates/license_check.py
+from genesis_gates import Gate, register_gate
+
+@register_gate
+class LicenseCheckGate(Gate):
+    name = "license-check"                 # unique; matches the manifest vocabulary
+    description = "Flag disallowed dependency licenses."
+    providers = ["my-license-scanner"]     # ordered built-in provider keys
+
+# my_plugin/providers/my_license_scanner.py
+from shutil import which
+
+from genesis_gates import GateResult, GateStatus, Provider, register_provider
+
+@register_provider
+class MyLicenseScanner(Provider):
+    key = "my-license-scanner"
+
+    def is_available(self, ctx) -> bool:   # self-skip when the tool is absent
+        return which("licensed") is not None
+
+    def run(self, ctx) -> GateResult:
+        ...                                # -> passed / failed / skipped / error
+```
+
+Inside this repo, dropping the module into `genesis_gates/gates/` or
+`genesis_gates/providers/` is enough — both packages auto-import their own
+modules at import time, so the decorator runs. **You do not need to fork the
+repo to add either one.** Any installed distribution can contribute through
+entry points:
+
+```toml
+# your-plugin/pyproject.toml
+[project.entry-points."genesis_gates.gates"]
+license-check = "my_plugin.gates.license_check:LicenseCheckGate"
+
+[project.entry-points."genesis_gates.providers"]
+my-license-scanner = "my_plugin.providers.my_license_scanner:MyLicenseScanner"
+```
+
+`pip install my-plugin` next to Genesis is the whole install step; the gate then
+appears in `genesis gates`, in `.genesis/config.yaml`, and in a manifest's
+`validation.required`/`advisory` lists like any built-in.
+
+**The discovery contract** (`genesis_gates/_plugins.py`):
+
+- An entry point may resolve to a `Gate`/`Provider` **subclass** (registered
+  under its `name`/`key`) or to a module that registers on import via the
+  decorators. An entry point that loads but registers nothing is reported, not
+  ignored.
+- **Fail-soft, but visible.** A plugin that raises on load never breaks the CLI;
+  the failure is collected in `genesis_gates.plugin_errors` and surfaced by the
+  commands that use the registry ("1 plugin failed to load: name — reason").
+  Nothing is silently swallowed.
+- **Built-ins win — registration is append-only.** Plugins load *after* the
+  built-ins, and a plugin may add names but never take over one already
+  registered; attempted replacements (including via import side effects) are
+  reverted and recorded as conflicts. This is a governance property, not a
+  namespacing convenience: an installed third-party package must not be able to
+  re-register `secret-scan` as a no-op and quietly weaken every audit on the
+  machine. Extend the check set; do not redefine it.
+
+**The contract a gate must honour** — the same rules the built-ins follow, and
+what review looks for:
+
+- **Deterministic.** Same repo in, same result out; no network calls in
+  analysis, no wall-clock or ordering dependence. The audit is a trust anchor
+  only if it is reproducible.
+- **Fail-closed on the gate's own errors.** A crash is `error`, never `passed`.
+  A missing tool is `skipped` (honest "not run"), never a silent pass.
+- **Never raise on findings.** Findings are data: return them with severity,
+  location, and remediation. Blocking is decided by the manifest
+  (`validation.required` vs `advisory`) and `fail_on_severity`, not by the gate
+  deciding to be fatal.
+- **Advisory AI stays additive.** A gate that consults an LLM must degrade to a
+  deterministic path when the model is unavailable (see `risk-classify` →
+  `rules`), and may never downgrade a deterministic finding.
+
 ## Trust model
 
 The design rule throughout: **deterministic analysis is the trust anchor; AI

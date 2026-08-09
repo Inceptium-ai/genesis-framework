@@ -1,0 +1,137 @@
+# Release: build and publish genesis-gates + genesis-cli to PyPI on a `v*` tag.
+#
+# Trusted Publishing (OIDC) — no API token is stored anywhere. GitHub mints a
+# short-lived identity token for this workflow and PyPI exchanges it for an
+# upload token, which is why `permissions: id-token: write` is required and
+# why the publish job needs no secrets at all.
+#
+# ── ONE-TIME HUMAN SETUP (per package, before the first tag) ─────────────────
+# For BOTH `genesis-gates` and `genesis-cli`, on https://pypi.org:
+#   1. Log in as an account that will own the project. Neither name is
+#      registered yet, so use the *pending publisher* flow:
+#      Your account -> Publishing -> "Add a new pending publisher".
+#   2. Fill in exactly:
+#        PyPI Project Name: genesis-gates   (then repeat for genesis-cli)
+#        Owner:             Inceptium-ai
+#        Repository name:   genesis-framework
+#        Workflow name:     release.yml
+#        Environment name:  pypi
+#   3. Repeat all of the above on https://test.pypi.org if you want the
+#      TestPyPI dry-run path below to work.
+#   4. In this repository: Settings -> Environments -> "New environment" named
+#      `pypi`. Add required reviewers so a human approves every publish, and
+#      (optionally) restrict it to tag patterns `v*`.
+# The pending publisher becomes a normal trusted publisher the moment the first
+# release lands; nothing needs to change here afterwards.
+#
+# ── RELEASING ────────────────────────────────────────────────────────────────
+#   1. Bump `version` in packages/genesis-gates/pyproject.toml and
+#      packages/genesis-cli/pyproject.toml (they release together), and bump the
+#      `genesis-gates>=` floor in genesis-cli if the CLI needs the new engine.
+#   2. Move the CHANGELOG's `## [X.Y.Z] — unreleased` heading to a dated entry.
+#   3. `git tag vX.Y.Z && git push origin vX.Y.Z`.
+# The tag must match the version in pyproject — `verify-tag` below fails the
+# run otherwise, before anything is uploaded.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Manual runs publish to TestPyPI only — a rehearsal that cannot burn a real
+  # version number (PyPI filenames are immutable and never reusable).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+      - run: uv sync
+      - name: Tests
+        run: uv run pytest packages/genesis-gates/tests packages/genesis-cli/tests -q
+      - name: Lint
+        run: uv run ruff check packages
+
+  build:
+    name: Build distributions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+
+      - name: Verify tag matches package versions
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected="${TAG#v}"
+          for pkg in genesis-gates genesis-cli; do
+            got=$(uv version --package "$pkg" --short)
+            if [ "$got" != "$expected" ]; then
+              echo "::error::$pkg is version $got but the tag says $expected"
+              exit 1
+            fi
+          done
+          echo "both packages are at $expected"
+
+      - name: Build sdists + wheels
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          uv build --package genesis-gates --out-dir dist
+          uv build --package genesis-cli --out-dir dist
+          ls -l dist
+
+      - name: Check metadata renders on PyPI
+        run: uvx twine check --strict dist/*
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI (rehearsal)
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for Trusted Publishing; no secrets needed
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for Trusted Publishing; no secrets needed
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+      # genesis-cli depends on genesis-gates, and both are in dist/, so a single
+      # upload publishes them together — the dependency is never missing from
+      # the index when the CLI appears.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true

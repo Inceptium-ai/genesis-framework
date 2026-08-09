@@ -9,6 +9,7 @@ Commands:
   genesis init [path]    Scaffold a new/bare repo so agents start agent-ready:
                          AGENTS.md, .gitignore, .env.example, audit workflow,
                          gate config. Idempotent — never overwrites.
+  genesis --version      Print the installed genesis-cli version.
 """
 
 from __future__ import annotations
@@ -23,6 +24,21 @@ from .agents_md import render_agents_md
 from .baseline import append_history, compare, render_trend
 from .report import render_html, render_terminal
 from .sarif import render_sarif
+
+
+def _version() -> str:
+    """The installed genesis-cli version, single-sourced from package metadata.
+
+    Reading the *distribution* metadata keeps pyproject the one place a version
+    is written. Running from a source checkout without an install has no
+    metadata to read, so fall back rather than crash `--version`.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("genesis-cli")
+    except PackageNotFoundError:
+        return "0+unknown (genesis-cli is not installed)"
 
 
 def _cmd_adopt(args: argparse.Namespace) -> int:
@@ -152,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Genesis Agent Workbench — make any repo agent-ready and "
                     "keep AI-generated changes governed.",
     )
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     adopt = sub.add_parser(

@@ -36,9 +36,11 @@ runs:
     - name: Install genesis-cli
       shell: bash
       run: |
-        # TODO: publish genesis-cli to PyPI. Until then, install straight from
-        # the repository instead of the line below:
-        #   pip install "git+<repo-url>#subdirectory=packages/genesis-cli"
+        # genesis-cli is published to PyPI by .github/workflows/release.yml,
+        # which runs on every `v*` tag (Trusted Publishing). If you are running
+        # this action from a ref that is newer than the latest release, install
+        # the unreleased CLI from source instead of the line below:
+        #   pip install "git+https://github.com/Inceptium-ai/genesis-framework#subdirectory=packages/genesis-cli"
         pip install genesis-cli
 
     - name: Run readiness audit

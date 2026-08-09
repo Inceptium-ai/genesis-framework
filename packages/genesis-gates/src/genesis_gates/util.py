@@ -4,6 +4,7 @@ and `genesis_gates.providers` can import it without a circular dependency.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -37,10 +38,14 @@ def run_cmd(
     cwd: str | None = None,
     input_text: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
+    env: dict[str, str] | None = None,
 ) -> CmdResult:
     """Run `cmd`, never raising. Security scanners routinely exit non-zero when
     they find issues, so a non-zero rc is returned as data, not an exception.
-    Only a missing binary or a timeout is flagged specially."""
+    Only a missing binary or a timeout is flagged specially.
+
+    `env` is *overlaid* on the current environment (not a replacement), so a
+    caller can set e.g. `CI=1` without having to reconstruct PATH."""
     try:
         proc = subprocess.run(
             cmd,
@@ -49,6 +54,7 @@ def run_cmd(
             text=True,
             capture_output=True,
             timeout=timeout,
+            env={**os.environ, **env} if env else None,
         )
     except FileNotFoundError:
         return CmdResult(rc=127, stdout="", stderr="binary not found", launched=False)

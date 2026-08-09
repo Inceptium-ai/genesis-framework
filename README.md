@@ -26,10 +26,36 @@ framework that makes agent work *provable*. Genesis provides that layer:
   so any tool can produce or consume Genesis artifacts.
 - **A composite GitHub Action** for CI (`packages/genesis-cli/action/`).
 
+## Install
+
 ```bash
+pip install genesis-cli          # or: uv tool install genesis-cli
+genesis --version
+genesis adopt .                  # audit the current repo
+genesis init my-app              # start a new repo agent-ready
+```
+
+`genesis-cli` pulls in `genesis-gates` (the engine) automatically. Python 3.12+.
+
+> **Status:** the PyPI packages are published by the release workflow on the
+> first tagged release (`v0.1.0`). Until that tag lands, `pip install
+> genesis-cli` will not resolve — use the from-source path below. See
+> [CHANGELOG.md](CHANGELOG.md) for what ships in 0.1.0.
+
+**From source** (works today, and the way to run an unreleased `main`):
+
+```bash
+git clone https://github.com/Inceptium-ai/genesis-framework
+cd genesis-framework
 uv sync                       # or: pip install -e packages/genesis-cli
 uv run genesis adopt .        # audit the current repo
 uv run genesis init my-app    # start a new repo agent-ready
+```
+
+Or install the CLI straight from the repository without cloning:
+
+```bash
+pip install "git+https://github.com/Inceptium-ai/genesis-framework#subdirectory=packages/genesis-cli"
 ```
 
 ## What this repo is (and isn't)
@@ -51,6 +77,9 @@ pull requests are welcome here — see [CONTRIBUTING.md](CONTRIBUTING.md).
 |---|---|
 | `packages/genesis-gates` | Gate engine (secret-scan, dependency-scan, unit-tests, SAST, SBOM…), analysis layer (system-completeness profiles, env reconciliation, readiness scoring, risk classification), JSON Schema contracts |
 | `packages/genesis-cli` | The `genesis` command: `adopt`, `init`; SARIF/JSON/HTML reports; AGENTS.md generation; the GitHub Action |
+
+Both are released together from this repository: a `v*` tag builds and publishes
+each to PyPI via Trusted Publishing (`.github/workflows/release.yml`).
 
 ## License
 
