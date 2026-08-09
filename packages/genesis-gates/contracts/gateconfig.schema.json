@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genesis.dev/schemas/gateconfig.schema.json",
+  "title": "Genesis Gate Config",
+  "description": "Project-level `.genesis/config.yaml` — the 'how' (provider selection, thresholds, BYO tooling) that complements the sealed Delivery Manifest (the 'what'). All optional; absent file means every gate auto-picks its default provider.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "type": "string" },
+    "kind": { "const": "GateConfig" },
+    "defaults": { "$ref": "#/$defs/settings" },
+    "gates": {
+      "type": "object",
+      "description": "Per-gate overrides keyed by gate name (e.g. secret-scan, dependency-scan).",
+      "additionalProperties": { "$ref": "#/$defs/settings" }
+    }
+  },
+  "$defs": {
+    "settings": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Provider key: a built-in scanner (e.g. trivy, gitleaks, semgrep, syft, pip-audit, pytest, llm, rules) or a generic BYO provider (command | report | external)."
+        },
+        "fail_on_severity": {
+          "enum": ["critical", "high", "medium", "low", "info"],
+          "description": "Findings at or above this severity fail the gate (overrides the provider's default pass/fail)."
+        },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "command": {
+          "type": ["string", "array"],
+          "items": { "type": "string" },
+          "description": "For provider: command — the tool to run."
+        },
+        "report": {
+          "type": "string",
+          "description": "For provider: report — path to a scan result your CI already produced."
+        },
+        "parser": {
+          "enum": ["sarif", "junit", "cyclonedx", "trivy-json", "gitleaks-json", "syft-json", "pip-audit-json"],
+          "description": "How to normalize command output / an imported report into findings."
+        },
+        "format": { "type": "string", "description": "Provider-specific output format (e.g. sbom cyclonedx-json)." },
+        "fail_on_nonzero": { "type": "boolean", "description": "For provider: command — treat a non-zero exit as a failing gate." },
+        "attested_by": { "type": "string", "description": "For provider: external — the system that handles this gate." },
+        "note": { "type": "string" },
+        "status": { "enum": ["passed", "skipped"], "description": "For provider: external — the recorded status (default passed, audit-noted)." }
+      }
+    }
+  }
+}

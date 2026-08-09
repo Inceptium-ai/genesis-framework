@@ -1,0 +1,68 @@
+name: "Genesis Readiness Audit"
+description: >-
+  Audit a repository for agent-readiness: delivery gates (secrets, deps, tests,
+  SAST, SBOM), system completeness, env hygiene — rolled into a 0-100 readiness
+  score with a SARIF report for code scanning. Deterministic; no API keys.
+author: "Genesis"
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: "Path of the repository (or subdirectory) to audit."
+    required: false
+    default: "."
+  min-score:
+    description: >-
+      Fail the job when the readiness score falls below this threshold
+      (0-100). The default of "0" reports without failing.
+    required: false
+    default: "0"
+  upload-sarif:
+    description: "Upload report.sarif to GitHub code scanning (\"true\"/\"false\")."
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      with:
+        python-version: "3.12"
+
+    - name: Install genesis-cli
+      shell: bash
+      run: |
+        # TODO: publish genesis-cli to PyPI. Until then, install straight from
+        # the repository instead of the line below:
+        #   pip install "git+<repo-url>#subdirectory=packages/genesis-cli"
+        pip install genesis-cli
+
+    - name: Run readiness audit
+      shell: bash
+      # Inputs are passed via env, never interpolated into the script body, so
+      # a malicious `path`/`min-score` cannot inject shell syntax.
+      env:
+        AUDIT_PATH: ${{ inputs.path }}
+        MIN_SCORE: ${{ inputs.min-score }}
+      run: |
+        genesis adopt "$AUDIT_PATH" \
+          --out "$AUDIT_PATH/.genesis-report" \
+          --min-score "$MIN_SCORE"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+      with:
+        sarif_file: ${{ inputs.path }}/.genesis-report/report.sarif
+        category: genesis-readiness
+
+    - name: Upload readiness report artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: genesis-report
+        path: ${{ inputs.path }}/.genesis-report/

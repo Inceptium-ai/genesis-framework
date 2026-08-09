@@ -1,0 +1,38 @@
+# A valid Genesis Delivery Manifest. Validate with: `genesis validate genesis/examples/manifest.sample.yaml`
+apiVersion: genesis.dev/v0
+kind: DeliveryManifest
+
+change:
+  id: CHG-2026-00421
+  title: Add customer document upload API
+  source: ai-assisted
+  requirements: [AC-001, AC-002]
+
+service:
+  name: document-api
+  owner: customer-platform
+  criticality: high
+  data_classification: confidential
+
+architecture:
+  blueprint: secure-fastapi-service-v1
+  dependencies: [object-storage, oidc-auth, postgres]
+
+api:
+  openapi_changed: true
+  breaking_change: false
+
+validation:
+  required:
+    - unit-tests
+    - dependency-scan
+    - secret-scan
+    - sast
+    - sbom
+  coverage_threshold: 80
+
+release:
+  risk_level: medium
+  strategy: canary
+  rollback_required: true
+  observability_profile: standard-api

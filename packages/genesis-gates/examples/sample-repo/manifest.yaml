@@ -1,0 +1,28 @@
+apiVersion: genesis.dev/v0
+kind: DeliveryManifest
+
+change:
+  id: CHG-2026-00777
+  title: Add report export endpoint
+  source: ai-assisted
+  requirements: [AC-101]
+
+service:
+  name: reporting-api
+  owner: data-platform
+  criticality: medium
+  data_classification: internal
+
+validation:
+  required:
+    - unit-tests
+    - dependency-scan
+    - secret-scan
+    - sast
+    - sbom
+  coverage_threshold: 70
+
+release:
+  risk_level: medium
+  strategy: rolling
+  rollback_required: true

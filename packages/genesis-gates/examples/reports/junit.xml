@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="app.tests" tests="3" failures="1" errors="0" skipped="0" time="0.123">
+    <testcase classname="app.tests.test_math" name="test_add" time="0.001"/>
+    <testcase classname="app.tests.test_math" name="test_subtract" time="0.001"/>
+    <testcase classname="app.tests.test_auth" name="test_login_rejects_bad_password" time="0.010">
+      <failure message="AssertionError: expected 401, got 200" type="AssertionError">
+Traceback (most recent call last):
+  File "app/tests/test_auth.py", line 18, in test_login_rejects_bad_password
+    assert resp.status_code == 401
+AssertionError: expected 401, got 200
+      </failure>
+    </testcase>
+  </testsuite>
+</testsuites>

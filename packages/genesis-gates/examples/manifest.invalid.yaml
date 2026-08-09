@@ -1,0 +1,23 @@
+# An INVALID manifest (bad change.id pattern, unknown criticality, unknown validation gate).
+# `genesis validate` should reject this with clear errors.
+apiVersion: genesis.dev/v0
+kind: DeliveryManifest
+
+change:
+  id: 2026-421            # invalid: must match CHG-YYYY-NNN
+  title: Broken change
+  source: robot           # invalid: not an allowed source
+
+service:
+  name: document-api
+  owner: customer-platform
+  criticality: extreme    # invalid: not an allowed criticality
+  data_classification: confidential
+
+validation:
+  required:
+    - unit-tests
+    - telepathy-scan      # invalid: not an allowed gate
+
+release:
+  risk_level: medium

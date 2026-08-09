@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genesis.dev/schemas/evidence.schema.json",
+  "title": "Genesis Evidence Package",
+  "description": "The linked, exportable record produced when a Delivery Manifest is run through the gates. This is what the control plane ingests.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "change_id", "status", "created_at", "gate_results"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "genesis.dev/v0" },
+    "kind": { "const": "EvidencePackage" },
+    "change_id": { "type": "string" },
+    "service": { "type": ["string", "null"] },
+    "owner": { "type": ["string", "null"] },
+    "risk_level": { "type": ["string", "null"] },
+    "status": { "enum": ["passed", "failed", "error"], "description": "failed if any required gate failed; error if any gate errored and none failed" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "manifest": { "type": "object" },
+    "gate_results": { "type": "array", "items": { "$ref": "#/$defs/gateResult" } },
+    "findings": {
+      "type": "array",
+      "description": "Flattened union of all gate findings, for convenient indexing.",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "gateResult": {
+      "type": "object",
+      "required": ["gate", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "gate": { "type": "string" },
+        "status": { "enum": ["passed", "failed", "skipped", "error"] },
+        "summary": { "type": "string" },
+        "duration_s": { "type": "number" },
+        "error": { "type": ["string", "null"] },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["gate", "title", "severity"],
+      "additionalProperties": false,
+      "properties": {
+        "gate": { "type": "string" },
+        "title": { "type": "string" },
+        "severity": { "enum": ["critical", "high", "medium", "low", "info"] },
+        "detail": { "type": "string" },
+        "location": { "type": ["string", "null"] },
+        "remediation": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

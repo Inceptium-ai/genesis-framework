@@ -1,0 +1,39 @@
+# Genesis Gate Config — the "how" (provider selection, thresholds, BYO tooling)
+# that complements the sealed Delivery Manifest (the "what").
+# Schema: contracts/gateconfig.schema.json
+apiVersion: genesis.dev/v0
+kind: GateConfig
+
+# Applied to every gate unless overridden under `gates.<name>`.
+defaults:
+  fail_on_severity: high
+
+gates:
+  # Built-in scanner, selected explicitly.
+  dependency-scan:
+    provider: pip-audit
+
+  # Defer-to-CI: import a SARIF report our pipeline already produced. No tool
+  # runs here — Genesis just normalizes the findings.
+  sast:
+    provider: report
+    report: examples/reports/sample.sarif
+    parser: sarif
+
+  # Import our test results (JUnit XML) instead of re-running the suite.
+  unit-tests:
+    provider: report
+    report: examples/reports/junit.xml
+    parser: junit
+
+  # Bring-your-own: run any tool and (optionally) parse its output.
+  license-check:
+    provider: command
+    command: ["python", "-c", "print('ok')"]
+    fail_on_nonzero: true
+
+  # External attestation: another system owns this gate; record it in the trail.
+  secret-scan:
+    provider: external
+    attested_by: "Acme CI / gitleaks step"
+    note: "enforced org-wide in the central pipeline"

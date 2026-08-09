@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genesis.dev/schemas/manifest.schema.json",
+  "title": "Genesis Delivery Manifest",
+  "description": "Machine-readable declaration of what an AI-assisted change must produce before it enters CI/CD. The 'PR as a delivery package'.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "change", "service", "validation", "release"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": { "const": "genesis.dev/v0" },
+    "kind": { "const": "DeliveryManifest" },
+    "change": {
+      "type": "object",
+      "required": ["id", "title", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^CHG-[0-9]{4}-[0-9]{3,}$", "description": "e.g. CHG-2026-00421" },
+        "title": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["ai-assisted", "ai-generated", "human"] },
+        "requirements": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["name", "owner", "criticality", "data_classification"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "criticality": { "enum": ["low", "medium", "high", "critical"] },
+        "data_classification": { "enum": ["public", "internal", "confidential", "restricted"] }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "blueprint": { "type": "string" },
+        "dependencies": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "openapi_changed": { "type": "boolean" },
+        "breaking_change": { "type": "boolean" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["required"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "unit-tests",
+              "integration-tests",
+              "api-contract-tests",
+              "dependency-scan",
+              "container-scan",
+              "secret-scan",
+              "sast",
+              "iac-policy-check",
+              "sbom"
+            ]
+          }
+        },
+        "coverage_threshold": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": ["risk_level"],
+      "additionalProperties": false,
+      "properties": {
+        "risk_level": { "enum": ["low", "medium", "high", "critical"] },
+        "strategy": { "enum": ["direct", "canary", "blue-green", "rolling"] },
+        "rollback_required": { "type": "boolean" },
+        "observability_profile": { "type": "string" }
+      }
+    }
+  }
+}

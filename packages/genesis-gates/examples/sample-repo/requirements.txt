@@ -1,0 +1,4 @@
+# Intentionally pinned to an old-but-installable version so the
+# dependency-scan gate flags it (CVE-2023-32681) while unit-tests can
+# still build the isolated venv on modern Python.
+requests==2.25.0

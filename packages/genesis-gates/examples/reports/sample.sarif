@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "ExampleSAST",
+          "informationUri": "https://example.com/sast",
+          "version": "1.0.0"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "py/sql-injection",
+          "level": "error",
+          "message": { "text": "Possible SQL injection from untrusted input." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/db.py" },
+                "region": { "startLine": 42 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "py/weak-hash",
+          "level": "warning",
+          "message": { "text": "Use of a weak hashing algorithm (MD5)." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/crypto.py" },
+                "region": { "startLine": 7 }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

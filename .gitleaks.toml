@@ -1,0 +1,11 @@
+# Scanner policy for the genesis-framework repo.
+# The gate engine ships INTENTIONAL fake secrets as test fixtures
+# (examples/sample-repo, tests) — allowlisted here; real rules stay active.
+[extend]
+useDefault = true
+[allowlist]
+paths = [
+  '''packages/genesis-gates/examples/''',
+  '''packages/genesis-gates/tests/''',
+  '''packages/genesis-server/tests/''',
+]

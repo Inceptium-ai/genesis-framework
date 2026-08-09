@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genesis.dev/schemas/canonical-objects.schema.json",
+  "title": "Genesis Canonical Objects (graph v0)",
+  "description": "Vendor-neutral domain objects and relationships stored in the control-plane asset graph. The control-plane maps these to Postgres relationship tables (no graph DB in v0).",
+  "type": "object",
+  "$defs": {
+    "Owner": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "enum": ["team", "person"], "default": "team" }
+      }
+    },
+    "Application": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": { "id": { "type": "string" }, "name": { "type": "string" } }
+    },
+    "Service": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "owner_id": { "type": ["string", "null"] },
+        "criticality": { "enum": ["low", "medium", "high", "critical"] },
+        "data_classification": { "enum": ["public", "internal", "confidential", "restricted"] }
+      }
+    },
+    "Repository": {
+      "type": "object",
+      "required": ["id", "url"],
+      "properties": { "id": { "type": "string" }, "url": { "type": "string" }, "service_id": { "type": ["string", "null"] } }
+    },
+    "ChangeRequest": {
+      "type": "object",
+      "required": ["id", "title", "source"],
+      "properties": {
+        "id": { "type": "string", "description": "the manifest change.id, e.g. CHG-2026-00421" },
+        "title": { "type": "string" },
+        "source": { "enum": ["ai-assisted", "ai-generated", "human"] },
+        "service_id": { "type": ["string", "null"] },
+        "risk_level": { "enum": ["low", "medium", "high", "critical"] },
+        "manifest": { "type": "object" }
+      }
+    },
+    "ReleaseCandidate": {
+      "type": "object",
+      "required": ["id", "change_id", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "change_id": { "type": "string" },
+        "status": { "enum": ["passed", "failed", "error"] }
+      }
+    },
+    "EvidenceRecord": {
+      "type": "object",
+      "required": ["id", "change_id", "status", "created_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "change_id": { "type": "string" },
+        "release_candidate_id": { "type": ["string", "null"] },
+        "status": { "enum": ["passed", "failed", "error"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "payload": { "type": "object", "description": "the full Evidence Package (evidence.schema.json)" }
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "required": ["id", "gate", "title", "severity"],
+      "properties": {
+        "id": { "type": "string" },
+        "evidence_id": { "type": ["string", "null"] },
+        "gate": { "type": "string" },
+        "title": { "type": "string" },
+        "severity": { "enum": ["critical", "high", "medium", "low", "info"] },
+        "location": { "type": ["string", "null"] }
+      }
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "required": ["id", "change_id", "decision"],
+      "properties": {
+        "id": { "type": "string" },
+        "change_id": { "type": "string" },
+        "decision": { "enum": ["allow", "deny", "allow-with-approval"] },
+        "rationale": { "type": "string" }
+      }
+    }
+  },
+  "relationships": {
+    "description": "Directed edges between the objects above (stored as rows: from_type, from_id, edge, to_type, to_id).",
+    "edges": [
+      "Owner OWNS Service",
+      "Application DEPENDS_ON Service",
+      "Service DEPENDS_ON Service",
+      "Repository BELONGS_TO Service",
+      "ChangeRequest TARGETS Service",
+      "ChangeRequest PRODUCES ReleaseCandidate",
+      "ReleaseCandidate VALIDATED_BY EvidenceRecord",
+      "EvidenceRecord HAS_FINDING Finding",
+      "ChangeRequest DECIDED_BY PolicyDecision"
+    ]
+  }
+}
