@@ -116,8 +116,20 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
 
-  publish-pypi:
-    name: Publish to PyPI
+  # Trusted Publishing binds an OIDC identity to ONE project, and PyPI refuses
+  # two pending publishers that share an identical (owner, repo, workflow,
+  # environment) tuple — so each package must be registered under a DIFFERENT
+  # environment and uploaded from a job matching it exactly. Publishing both
+  # from a single job fails with "Non-user identities cannot create new
+  # projects" for whichever package's publisher doesn't match.
+  #
+  # Registered publishers (pypi.org -> Publishing):
+  #   genesis-gates : environment "pypi"
+  #   genesis-cli   : environment (Any)  -> job declares no environment
+  #
+  # gates publishes FIRST so the CLI's dependency is on the index when it lands.
+  publish-pypi-gates:
+    name: Publish genesis-gates to PyPI
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -129,9 +141,38 @@ jobs:
         with:
           name: dist
           path: dist/
-      # genesis-cli depends on genesis-gates, and both are in dist/, so a single
-      # upload publishes them together — the dependency is never missing from
-      # the index when the CLI appears.
+      - name: Isolate genesis-gates distributions
+        run: |
+          mkdir -p upload
+          mv dist/genesis_gates-* upload/
+          ls -l upload
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
+          packages-dir: upload
           attestations: true
+          verbose: true
+
+  publish-pypi-cli:
+    name: Publish genesis-cli to PyPI
+    needs: publish-pypi-gates   # dependency must exist on the index first
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # No `environment:` — the genesis-cli pending publisher is registered
+    # without one, and the OIDC environment claim must match.
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+      - name: Isolate genesis-cli distributions
+        run: |
+          mkdir -p upload
+          mv dist/genesis_cli-* upload/
+          ls -l upload
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: upload
+          attestations: true
+          verbose: true
