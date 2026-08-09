@@ -49,3 +49,6 @@ jobs:
         with:
           name: genesis-readiness-report
           path: .genesis-report/
+          # .genesis-report is a dot-directory; upload-artifact@v4 skips
+          # hidden paths unless this is set (the reports uploaded empty).
+          include-hidden-files: true
