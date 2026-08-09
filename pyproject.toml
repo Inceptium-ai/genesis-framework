@@ -23,6 +23,11 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Pin collection to the package test dirs: `providers/conftest.py` is an OPA
+# *provider module*, not a pytest conftest — letting pytest walk src/ makes it
+# import-collide and error the run.
+testpaths = ["packages/genesis-gates/tests", "packages/genesis-cli/tests"]
+norecursedirs = ["src", "examples", "fixtures", "build", ".venv", "node_modules"]
 
 [tool.ruff]
 line-length = 100

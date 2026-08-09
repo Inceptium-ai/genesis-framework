@@ -62,7 +62,13 @@ def scan_code_vars(workdir: Path) -> set[str]:
     for f in workdir.rglob("*"):
         if not f.is_file() or f.suffix not in (".py", ".ts", ".tsx", ".js", ".jsx"):
             continue
-        if any(part in _SKIP_DIRS for part in f.parts):
+        # Skip-dirs are matched RELATIVE to the repo root (an absolute path
+        # may legitimately contain "build", "examples", …).
+        try:
+            rel = f.relative_to(workdir)
+        except ValueError:
+            rel = f
+        if any(part in _SKIP_DIRS for part in rel.parts):
             continue
         try:
             text = f.read_text(errors="replace")

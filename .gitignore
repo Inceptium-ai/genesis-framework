@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Genesis audit artifacts
+.genesis-report/
+
+# Environments / secrets
+.env
+.env.*
+!.env.example

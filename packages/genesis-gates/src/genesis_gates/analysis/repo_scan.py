@@ -51,6 +51,21 @@ _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 4000
 
 
+def _skipped(f: Path, repo: Path) -> bool:
+    """True when the file sits inside a skipped directory.
+
+    Matching is RELATIVE to the repo root: an absolute path may legitimately
+    contain a segment like `build`/`examples`/`target` (e.g. a checkout at
+    ~/src/examples/my-app), and matching those would silently skip the entire
+    repository — producing a bogus "no tests / no CI" audit.
+    """
+    try:
+        rel = f.relative_to(repo)
+    except ValueError:
+        rel = f
+    return any(part in _SKIP_DIRS for part in rel.parts)
+
+
 def _iter_source_files(repo: Path):
     count = 0
     for f in repo.rglob("*"):
@@ -58,7 +73,7 @@ def _iter_source_files(repo: Path):
             return
         if not f.is_file() or f.suffix not in _SOURCE_SUFFIXES:
             continue
-        if any(part in _SKIP_DIRS for part in f.parts):
+        if _skipped(f, repo):
             continue
         try:
             if f.stat().st_size > _MAX_FILE_BYTES:
@@ -74,7 +89,7 @@ def marker_text(repo: Path) -> str:
     parts: list[str] = []
     for name in _MANIFEST_FILES + _CONFIG_HINTS:
         for f in list(repo.rglob(name))[:20]:
-            if any(part in _SKIP_DIRS for part in f.parts):
+            if _skipped(f, repo):
                 continue
             try:
                 parts.append(f.read_text(errors="replace")[:50_000])
@@ -156,7 +171,7 @@ def structure_facts(repo: Path) -> dict:
     def _any(*globs: str) -> bool:
         return any(
             f for g in globs for f in repo.rglob(g)
-            if not any(part in _SKIP_DIRS for part in f.parts)
+            if not _skipped(f, repo)
         )
 
     _surface, n_routes = surface_text(repo)

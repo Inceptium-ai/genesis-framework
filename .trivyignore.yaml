@@ -1,0 +1,21 @@
+# Scanner policy for the Genesis Framework.
+#
+# Every entry is PATH-SCOPED and carries a statement. Nothing is blanket-
+# ignored: an advisory affecting real code still fails the gate.
+vulnerabilities:
+  - id: CVE-2023-32681
+    paths: ["packages/genesis-gates/examples/sample-repo/requirements.txt"]
+    statement: >-
+      Intentionally vulnerable detection fixture. This repo exists so the
+      dependency-scan gate has something to find in tests/demos; it is never a
+      runtime dependency of any published package and is installed only into a
+      throwaway venv for the fixture's own tests.
+  - id: CVE-2024-35195
+    paths: ["packages/genesis-gates/examples/sample-repo/requirements.txt"]
+    statement: Same intentionally vulnerable detection fixture (see CVE-2023-32681).
+  - id: CVE-2024-47081
+    paths: ["packages/genesis-gates/examples/sample-repo/requirements.txt"]
+    statement: Same intentionally vulnerable detection fixture (see CVE-2023-32681).
+  - id: CVE-2026-25645
+    paths: ["packages/genesis-gates/examples/sample-repo/requirements.txt"]
+    statement: Same intentionally vulnerable detection fixture (see CVE-2023-32681).

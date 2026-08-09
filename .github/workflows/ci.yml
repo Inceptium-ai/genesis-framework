@@ -1,0 +1,51 @@
+# Genesis Framework CI: tests, lint, and the framework auditing itself.
+name: ci
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+      - run: uv sync
+      - name: Tests
+        run: uv run pytest packages/genesis-gates/tests packages/genesis-cli/tests -q
+      - name: Lint
+        run: uv run ruff check packages
+
+  self-audit:
+    # Genesis audits its own repository with its own tool. The score may only
+    # ratchet up: a regression fails the build.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+      - run: uv sync
+      # Secret leakage is the one risk a public repo cannot tolerate, so the
+      # scanner backing secret-scan is installed. trivy/semgrep/syft are not:
+      # their gates skip cleanly with partial credit, which is why the bar is
+      # 75 here — a full local run with every scanner present scores 94.5/A.
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+      - name: Agent-readiness audit
+        run: uv run genesis adopt . --min-score 75
+      - uses: github/codeql-action/upload-sarif@4e828ff8d448a8a6e532957b1811f387a63867e8 # v3
+        if: always()
+        with:
+          sarif_file: .genesis-report/report.sarif
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: genesis-readiness-report
+          path: .genesis-report/

@@ -152,3 +152,29 @@ def test_repo_scan_reads_openapi_as_marker_source(tmp_path):
     assert "size_limit" not in gap_flows
     assert "type_validation" not in gap_flows
     assert "delete_flow" in gap_flows  # no DELETE route anywhere
+
+
+def test_skip_dirs_are_matched_relative_to_the_repo_root(tmp_path):
+    """A repo whose ABSOLUTE path contains a skip-dir name (e.g. a checkout at
+    ~/src/build/my-app) must still be scanned — matching the absolute path
+    skipped the entire repository and produced a bogus "no tests / no CI"
+    audit."""
+    from genesis_gates.analysis.repo_scan import structure_facts
+
+    repo = tmp_path / "build" / "examples" / "my-app"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_x.py").write_text("def test_ok():\n    assert True\n")
+    (repo / ".github" / "workflows").mkdir(parents=True)
+    (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\n")
+    (repo / "README.md").write_text("# app\n")
+
+    facts = structure_facts(repo)
+    assert facts["has_tests"] is True
+    assert facts["has_ci"] is True
+
+    # …while a build/ directory INSIDE the repo is still skipped.
+    inner = repo / "build" / "tests"
+    inner.mkdir(parents=True)
+    (inner / "test_generated.py").write_text("def test_gen():\n    assert True\n")
+    (repo / "tests" / "test_x.py").unlink()
+    assert structure_facts(repo)["has_tests"] is False
