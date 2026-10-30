@@ -1,13 +1,17 @@
-"""Shared helpers for gates and providers: bounded subprocess execution and
-severity mapping. stdlib only. Lives at the package root so both `genesis_gates.gates`
-and `genesis_gates.providers` can import it without a circular dependency.
+"""Shared helpers for gates and providers: bounded subprocess execution,
+severity mapping and the shared `skip_dirs` scope setting. stdlib only. Lives at
+the package root so both `genesis_gates.gates` and `genesis_gates.providers` can
+import it without a circular dependency.
 """
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from .engine.base import Severity
 
@@ -100,3 +104,62 @@ def map_severity(value: str | None, default: Severity = Severity.medium) -> Seve
     if not value:
         return default
     return _SEVERITY_MAP.get(str(value).strip().lower(), default)
+
+
+def configured_skip_dirs(settings: Mapping[str, Any]) -> list[str]:
+    """Normalize the optional ``skip_dirs`` gate setting into a list of dirs.
+
+    ``skip_dirs`` is a list of **repo-relative directories a scanner must not
+    look at**, set per gate in ``.genesis/config.yaml``::
+
+        gates:
+          dependency-scan:
+            skip_dirs: ["vendor", "third_party/generated"]
+          sast:
+            skip_dirs: ["vendor"]
+
+    It exists for trees the repo does not author and is not accountable for —
+    vendored dependencies, generated output, packaged sample/fixture apps that
+    are scanned in their own right when they are instantiated. It is *not* a
+    way to hide findings in your own code: a skipped directory is invisible to
+    the gate, so every entry should carry a comment a reviewer can audit, and
+    the real attack surface (your source, infra and CI) must stay in scope.
+
+    Each provider maps this to its scanner's own exclusion flag (trivy
+    ``--skip-dirs``, semgrep ``--exclude``) rather than post-filtering
+    findings, so the evidence package records what the scanner actually looked
+    at. Providers whose scanner has its own repo-level allowlist file (e.g.
+    gitleaks' ``.gitleaks.toml``) do not implement this.
+
+    Accepts a single string or a list of strings; blank entries and duplicates
+    are dropped (order preserved) and a leading ``./`` or trailing ``/`` is
+    stripped, so ``"./catalog/"`` and ``"catalog"`` mean the same thing. An
+    absolute path or one containing ``..`` is rejected rather than passed on:
+    the scanners interpret these inconsistently, so it would read like scope
+    that silently does not apply.
+    """
+    raw = settings.get("skip_dirs")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(
+            f"skip_dirs must be a string or a list of strings, got {type(raw).__name__}"
+        )
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            raise ValueError(
+                f"skip_dirs entries must be strings, got {type(entry).__name__}"
+            )
+        cleaned = entry.strip().rstrip("/")
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        if cleaned.startswith("/") or ".." in Path(cleaned).parts:
+            raise ValueError(
+                f"skip_dirs entries must be repo-relative directories, got {entry!r}"
+            )
+        if cleaned and cleaned not in out:
+            out.append(cleaned)
+    return out

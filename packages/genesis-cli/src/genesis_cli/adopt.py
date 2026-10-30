@@ -17,6 +17,7 @@ import genesis_gates.providers  # noqa: F401
 from genesis_gates import GateContext, GateRunner, get_gate, load_gate_config
 from genesis_gates.analysis import (
     analyze,
+    declared_env_vars,
     reconcile,
     repo_input,
     score_readiness,
@@ -56,7 +57,13 @@ def run_audit(repo: Path) -> dict:
     repo = repo.resolve()
     gate_results = run_gates(repo).get("gate_results", [])
     completeness = analyze(repo_input(repo))
-    reconciliation = reconcile(repo, stored_deps={})
+    # A brownfield audit has no stored dependency map, so the repo's own
+    # `.env.example`-family files ARE its declared config contract. Passing
+    # them makes env_hygiene measure "are env vars declared?"; with an empty
+    # map, every compose `${VAR}` without a default counted as an undeclared
+    # gap even when the repo documents it properly, which pinned the category
+    # near zero for any repo with an undefaulted compose reference.
+    reconciliation = reconcile(repo, stored_deps=declared_env_vars(repo))
     facts = structure_facts(repo)
     readiness = score_readiness(
         gate_results=gate_results, facts=facts,

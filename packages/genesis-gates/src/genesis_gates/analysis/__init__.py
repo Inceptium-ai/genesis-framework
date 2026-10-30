@@ -16,7 +16,12 @@ from .completeness import (
     detect_profiles,
     flow_gaps,
 )
-from .dependency_reconcile import reconcile, scan_code_vars, scan_compose_vars
+from .dependency_reconcile import (
+    declared_env_vars,
+    reconcile,
+    scan_code_vars,
+    scan_compose_vars,
+)
 from .readiness import score_readiness
 from .repo_scan import detect_commands, repo_input, structure_facts
 from .risk import classify_run, classify_task
@@ -34,6 +39,7 @@ __all__ = [
     "flow_gaps",
     "classify_run",
     "classify_task",
+    "declared_env_vars",
     "reconcile",
     "scan_code_vars",
     "scan_compose_vars",

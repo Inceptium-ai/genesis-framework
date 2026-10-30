@@ -14,6 +14,10 @@ actually consumes and reconciles them into the project's dependency map:
   empty default) and no stored value is a REQUIRED gap -> added as a dep.
 - Direct code reads (os.getenv / os.environ / process.env / import.meta.env)
   are a secondary signal, reported for visibility.
+
+A brownfield audit has no stored dependency map, so ``declared_env_vars`` reads
+the repo's own ``.env.example``-family files (and a local ``.env``) and supplies
+their keys as the declaration — see its docstring.
 """
 
 from __future__ import annotations
@@ -30,6 +34,14 @@ _SKIP_DIRS = {".genesis-work", "node_modules", "gss", ".git", "dist", "build",
               "__pycache__", ".venv", "venv"}
 
 _COMPOSE_VAR = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(:-([^}]*))?\}")
+# `KEY=`, `export KEY=` — a declaration. Commented-out lines are deliberately
+# NOT matched: a var someone remembered to mention in a comment is not declared.
+_ENV_DECL = re.compile(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=")
+# Env files that constitute the repo's documented configuration contract:
+# `.env.example` and friends, any `.env.<stage>.example`, and a local `.env`
+# (a var with a real value there is supplied, not missing).
+_ENV_FILE_GLOBS = (".env", ".env.example", ".env.sample", ".env.template",
+                   ".env.*.example", ".env.*.sample", ".env.*.template")
 _CODE_PATTERNS = (
     re.compile(r"os\.getenv\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]"),
     re.compile(r"os\.environ(?:\.get)?\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]"),
@@ -77,6 +89,45 @@ def scan_code_vars(workdir: Path) -> set[str]:
         for pat in _CODE_PATTERNS:
             found.update(pat.findall(text))
     return found - _IGNORE
+
+
+def declared_env_vars(workdir: Path) -> dict[str, dict]:
+    """Env vars the repo already declares, as a `stored_deps`-shaped mapping.
+
+    The pipeline reconciles a *built app* against the dependency map Genesis
+    stores for it. A brownfield audit (`genesis adopt`) has no such map, so the
+    repo's own env files are the equivalent declaration: keys in `.env.example`
+    (and `.env.sample` / `.env.template`, any `.env.<stage>.example`, plus a
+    local `.env` if one exists) ARE the documented deploy contract. Without
+    this, every ``${VAR}`` a compose file references without a default counts
+    as an undeclared gap even when the repo documents it properly — which made
+    the category measure "does this machine happen to hold values" instead of
+    "are env vars declared".
+
+    Only key NAMES are read; values are never parsed, logged or reported, so
+    pointing this at a real `.env` cannot leak a secret. Commented-out lines do
+    not count as declarations.
+    """
+    declared: dict[str, dict] = {}
+    seen: set[Path] = set()
+    for pattern in _ENV_FILE_GLOBS:
+        for f in sorted(workdir.glob(pattern)):
+            if not f.is_file() or f in seen:
+                continue
+            seen.add(f)
+            try:
+                text = f.read_text(errors="replace")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                m = _ENV_DECL.match(line)
+                if not m or m.group(1) in _IGNORE:
+                    continue
+                declared.setdefault(m.group(1), {
+                    "env_var": m.group(1),
+                    "source_detected": f"declared in {f.name}",
+                })
+    return declared
 
 
 def reconcile(workdir: Path, stored_deps: dict) -> dict:

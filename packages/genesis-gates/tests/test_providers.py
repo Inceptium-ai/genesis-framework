@@ -7,6 +7,7 @@ status/findings/summary only.
 """
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -184,7 +185,7 @@ def test_external_missing_attested_by_is_error() -> None:
 
 # --- trivy provider: repo-shipped ignore file ------------------------------ #
 
-def _run_trivy_capturing(monkeypatch, tmp_path: Path) -> list[str]:
+def _run_trivy_capturing(monkeypatch, tmp_path: Path, settings=None) -> list[str]:
     """Run TrivyProvider against tmp_path with trivy stubbed; return its argv."""
     import genesis_gates.providers.trivy as trivy_mod
     from genesis_gates.util import CmdResult
@@ -197,7 +198,7 @@ def _run_trivy_capturing(monkeypatch, tmp_path: Path) -> list[str]:
 
     monkeypatch.setattr(trivy_mod, "which", lambda *a: "/usr/bin/trivy")
     monkeypatch.setattr(trivy_mod, "run_cmd", fake_run_cmd)
-    res = trivy_mod.TrivyProvider({}).run(ctx(tmp_path))
+    res = trivy_mod.TrivyProvider(settings or {}).run(ctx(tmp_path))
     assert res.status is GateStatus.passed
     return captured
 
@@ -225,6 +226,179 @@ def test_trivy_prefers_yaml_ignorefile_over_plain(
 def test_trivy_omits_ignorefile_when_absent(monkeypatch, tmp_path: Path) -> None:
     argv = _run_trivy_capturing(monkeypatch, tmp_path)
     assert "--ignorefile" not in argv
+
+
+# --- skip_dirs: the shared out-of-scope setting ----------------------------- #
+
+def test_configured_skip_dirs_normalizes_and_dedupes() -> None:
+    from genesis_gates.util import configured_skip_dirs
+
+    assert configured_skip_dirs({}) == []
+    assert configured_skip_dirs({"skip_dirs": []}) == []
+    # A single string is accepted; "./" and a trailing "/" are noise.
+    assert configured_skip_dirs({"skip_dirs": "catalog"}) == ["catalog"]
+    assert configured_skip_dirs(
+        {"skip_dirs": ["./catalog/", "catalog", " workspaces ", "", "a/b/"]}
+    ) == ["catalog", "workspaces", "a/b"]
+
+
+def test_configured_skip_dirs_rejects_non_strings() -> None:
+    from genesis_gates.util import configured_skip_dirs
+
+    with pytest.raises(ValueError):
+        configured_skip_dirs({"skip_dirs": 7})
+    with pytest.raises(ValueError):
+        configured_skip_dirs({"skip_dirs": ["ok", 7]})
+
+
+def test_configured_skip_dirs_rejects_non_repo_relative_paths() -> None:
+    """Scope that silently would not apply is worse than no scope."""
+    from genesis_gates.util import configured_skip_dirs
+
+    with pytest.raises(ValueError):
+        configured_skip_dirs({"skip_dirs": ["/etc"]})
+    with pytest.raises(ValueError):
+        configured_skip_dirs({"skip_dirs": ["../outside"]})
+
+
+def test_trivy_passes_skip_dirs_when_configured(monkeypatch, tmp_path: Path) -> None:
+    argv = _run_trivy_capturing(monkeypatch, tmp_path,
+                                settings={"skip_dirs": ["catalog", "workspaces"]})
+    # One flag per directory, repo-relative (trivy anchors them at the target).
+    assert argv.count("--skip-dirs") == 2
+    pairs = [(argv[i], argv[i + 1]) for i, a in enumerate(argv) if a == "--skip-dirs"]
+    assert pairs == [("--skip-dirs", "catalog"), ("--skip-dirs", "workspaces")]
+    # …and before the scan target, which stays last.
+    assert argv[-1] == str(tmp_path)
+
+
+def test_trivy_omits_skip_dirs_when_not_configured(monkeypatch, tmp_path: Path) -> None:
+    assert "--skip-dirs" not in _run_trivy_capturing(monkeypatch, tmp_path)
+
+
+def _run_semgrep_capturing(monkeypatch, tmp_path: Path, settings=None) -> list[str]:
+    """Run SemgrepProvider against tmp_path with semgrep stubbed; return its argv."""
+    import genesis_gates.providers.semgrep as semgrep_mod
+    from genesis_gates.util import CmdResult
+
+    captured: list[str] = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        captured.extend(cmd)
+        return CmdResult(rc=0, stdout='{"results": []}', stderr="")
+
+    monkeypatch.setattr(semgrep_mod, "which", lambda *a: "/usr/bin/semgrep")
+    monkeypatch.setattr(semgrep_mod, "run_cmd", fake_run_cmd)
+    res = semgrep_mod.SemgrepProvider(settings or {}).run(ctx(tmp_path))
+    assert res.status is GateStatus.passed
+    return captured
+
+
+def test_semgrep_excludes_skip_dirs_anchored_at_repo_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    argv = _run_semgrep_capturing(monkeypatch, tmp_path,
+                                  settings={"skip_dirs": ["catalog", "a/b"]})
+    pairs = [(argv[i], argv[i + 1]) for i, a in enumerate(argv) if a == "--exclude"]
+    # The leading "./" is load-bearing: a bare `--exclude catalog` would also
+    # exclude any nested directory called "catalog" (see the provider docstring).
+    assert pairs == [("--exclude", "./catalog"), ("--exclude", "./a/b")]
+    assert argv[-1] == str(tmp_path)
+
+
+def test_semgrep_omits_exclude_when_not_configured(monkeypatch, tmp_path: Path) -> None:
+    assert "--exclude" not in _run_semgrep_capturing(monkeypatch, tmp_path)
+
+
+# --- skip_dirs against the real scanners ----------------------------------- #
+# The tests above prove the flags are built; these prove the scanners honour
+# them — a finding inside a skipped dir disappears while one outside still
+# fails the gate. They need the binaries, so they skip where those are absent
+# (the CI test job installs none; the genesis-audit job installs all four).
+
+def _vuln_tree(tmp_path: Path) -> Path:
+    """A repo with a known-vulnerable manifest inside and outside `samples/`."""
+    for rel in ("samples", "mine"):
+        (tmp_path / rel).mkdir()
+        # requests 2.25.0 carries several published CVEs (the same fixture
+        # version packages/genesis-gates/examples/sample-repo uses).
+        (tmp_path / rel / "requirements.txt").write_text("requests==2.25.0\n")
+    return tmp_path
+
+
+@pytest.mark.skipif(shutil.which("trivy") is None, reason="trivy not installed")
+def test_trivy_skip_dirs_drops_findings_in_skipped_dir_only(tmp_path: Path) -> None:
+    from genesis_gates.providers.trivy import TrivyProvider
+
+    repo = _vuln_tree(tmp_path)
+    wide = TrivyProvider({"timeout": 300}).run(ctx(repo))
+    assert wide.status is GateStatus.failed
+    locations = {f.location for f in wide.findings}
+    assert any("samples/" in loc for loc in locations)
+    assert any("mine/" in loc for loc in locations)
+
+    scoped = TrivyProvider({"timeout": 300, "skip_dirs": ["samples"]}).run(ctx(repo))
+    # The finding outside the skipped dir still fails the gate.
+    assert scoped.status is GateStatus.failed
+    scoped_locations = {f.location for f in scoped.findings}
+    assert not any("samples/" in loc for loc in scoped_locations)
+    assert any("mine/" in loc for loc in scoped_locations)
+
+    # Skipping both trees leaves nothing to find -> the gate passes.
+    both = TrivyProvider(
+        {"timeout": 300, "skip_dirs": ["samples", "mine"]}
+    ).run(ctx(repo))
+    assert both.status is GateStatus.passed
+
+
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
+def test_semgrep_exclude_drops_findings_in_skipped_dir_only(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Real semgrep, local rule.
+
+    The provider hardcodes ``--config auto``, which would pull the rule
+    registry over the network; this swaps that one argument for a one-rule file
+    and leaves the rest of the argv — crucially our ``--exclude ./samples`` —
+    to the real binary, so the exclusion semantics are genuinely exercised.
+    """
+    import genesis_gates.providers.semgrep as semgrep_mod
+    from genesis_gates.util import run_cmd as real_run_cmd
+
+    rule = tmp_path / "rule.yaml"
+    rule.write_text(
+        "rules:\n"
+        "  - id: no-eval\n"
+        "    patterns:\n"
+        "      - pattern: eval(...)\n"
+        "    message: eval is dangerous\n"
+        "    languages: [python]\n"
+        "    severity: WARNING\n"
+    )
+    repo = tmp_path / "repo"
+    for rel in ("samples", "mine"):
+        (repo / rel).mkdir(parents=True)
+        (repo / rel / "mod.py").write_text('def f():\n    eval("1+1")\n')
+
+    def local_rules(cmd, **kwargs):
+        cmd = [str(rule) if a == "auto" else a for a in cmd]
+        return real_run_cmd(cmd, **kwargs)
+
+    monkeypatch.setattr(semgrep_mod, "run_cmd", local_rules)
+    prov = semgrep_mod.SemgrepProvider
+
+    wide = prov({"timeout": 300}).run(ctx(repo))
+    assert wide.status is GateStatus.failed
+    assert {Path(f.location.split(":")[0]).parent.name for f in wide.findings} == {
+        "samples", "mine"}
+
+    scoped = prov({"timeout": 300, "skip_dirs": ["samples"]}).run(ctx(repo))
+    assert scoped.status is GateStatus.failed  # the one outside still fails
+    assert {Path(f.location.split(":")[0]).parent.name for f in scoped.findings} == {
+        "mine"}
+
+    both = prov({"timeout": 300, "skip_dirs": ["samples", "mine"]}).run(ctx(repo))
+    assert both.status is GateStatus.passed
 
 
 # --- registration ---------------------------------------------------------- #

@@ -9,6 +9,12 @@ Commands:
   genesis init [path]    Scaffold a new/bare repo so agents start agent-ready:
                          AGENTS.md, .gitignore, .env.example, audit workflow,
                          gate config. Idempotent — never overwrites.
+  genesis runner …       Local runner for the Genesis platform: `connect` pairs
+                         this machine with a server (runner token), `start`
+                         executes your builds' coding-agent tasks here through
+                         your own `claude` CLI (your subscription), `status`
+                         shows the connection. The server keeps orchestration,
+                         validation, gates, evidence, and billing.
   genesis --version      Print the installed genesis-cli version.
 """
 
@@ -219,6 +225,11 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("path", nargs="?", default=".",
                       help="directory to scaffold (default: .; created if missing)")
     init.set_defaults(func=_cmd_init)
+
+    # Local runner (deferred imports: the subcommands import httpx lazily).
+    from .runner.runner_cmd import add_runner_parser
+
+    add_runner_parser(sub)
 
     args = parser.parse_args(argv)
     return args.func(args)

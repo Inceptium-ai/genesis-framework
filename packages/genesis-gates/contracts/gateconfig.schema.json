@@ -29,6 +29,11 @@
           "description": "Findings at or above this severity fail the gate (overrides the provider's default pass/fail)."
         },
         "timeout": { "type": "integer", "minimum": 1 },
+        "skip_dirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Repo-relative directories the scanner must not look at — vendored dependencies, generated output, packaged sample/fixture apps that are scanned in their own right. Anchored at the repo root: \"vendor\" skips <repo>/vendor, not <repo>/packages/x/vendor (list nested trees explicitly). Honoured by the trivy (--skip-dirs) and semgrep (--exclude) providers; providers whose scanner has its own repo-level allowlist file (gitleaks → .gitleaks.toml) ignore it. A skipped directory is invisible to the gate, so give every entry a comment a reviewer can audit and keep your own source, infra and CI in scope."
+        },
         "command": {
           "type": ["string", "array"],
           "items": { "type": "string" },

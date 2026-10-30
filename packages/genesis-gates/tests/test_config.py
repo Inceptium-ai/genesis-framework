@@ -118,6 +118,28 @@ def test_load_returns_empty_when_absent(tmp_path):
     assert load_gate_config(tmp_path) == {}
 
 
+def test_load_reads_skip_dirs_per_gate(tmp_path):
+    """`skip_dirs` is a documented knob, so the schema accepts it explicitly."""
+    cfg_dir = tmp_path / ".genesis"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.yaml").write_text(
+        "apiVersion: genesis.dev/v0\n"
+        "kind: GateConfig\n"
+        "gates:\n"
+        "  dependency-scan:\n"
+        "    skip_dirs: [vendor, third_party/generated]\n"
+    )
+    loaded = load_gate_config(tmp_path)
+    assert loaded["gates"]["dependency-scan"]["skip_dirs"] == [
+        "vendor", "third_party/generated"]
+
+
+def test_validate_rejects_non_string_skip_dirs():
+    errors = validate_gate_config({"gates": {"sast": {"skip_dirs": ["ok", 7]}}})
+    assert any("skip_dirs" in e for e in errors)
+    assert not validate_gate_config({"gates": {"sast": {"skip_dirs": ["ok"]}}})
+
+
 def test_load_raises_on_invalid(tmp_path):
     cfg_dir = tmp_path / ".genesis"
     cfg_dir.mkdir()

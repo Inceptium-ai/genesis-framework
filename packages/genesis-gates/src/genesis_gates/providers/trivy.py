@@ -10,6 +10,14 @@ scoping and a required `statement` rationale) or `.trivyignore` at its root, it
 is passed via `--ignorefile`. trivy only auto-discovers ignore files relative
 to the *current working directory*, not the scan target, so without this a
 repo's own documented suppressions would silently not apply.
+
+Settings (`.genesis/config.yaml` → `gates.dependency-scan`):
+
+- ``timeout`` — seconds (default 120).
+- ``skip_dirs`` — repo-relative directories to leave out of the scan, one
+  ``--skip-dirs`` flag each (see `genesis_gates.util.configured_skip_dirs`).
+  trivy anchors these at the scan target, so ``vendor`` skips ``<repo>/vendor``
+  and *not* ``<repo>/packages/x/vendor`` — list a nested tree explicitly.
 """
 from __future__ import annotations
 
@@ -19,7 +27,7 @@ from pathlib import Path
 
 from ..engine.base import Finding, GateContext, GateResult, GateStatus, Severity
 from ..engine.provider import Provider, register_provider
-from ..util import map_severity, run_cmd, which
+from ..util import configured_skip_dirs, map_severity, run_cmd, which
 
 
 def _findings_from_trivy(gate: str, raw: str) -> list[Finding]:
@@ -79,6 +87,11 @@ class TrivyProvider(Provider):
         ignorefile = repo_ignorefile(repo)
         if ignorefile is not None:
             cmd += ["--ignorefile", str(ignorefile)]
+        # Out-of-scope trees (vendored, generated, packaged sample apps). trivy
+        # matches --skip-dirs relative to the scan target, which is exactly the
+        # repo-relative meaning of the setting, so entries are passed as-is.
+        for skipped in configured_skip_dirs(self.settings):
+            cmd += ["--skip-dirs", skipped]
         res = run_cmd([*cmd, str(repo)], timeout=timeout)
         if res.timed_out:
             return GateResult(

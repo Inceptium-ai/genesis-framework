@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -63,7 +64,13 @@ def _ensure_app_venv(repo: Path, requirements: Path) -> tuple[Path | None, str]:
     path + a hash of the requirements, so it is reused across resumes and stays
     out of pytest's collection tree.
     """
+    # Test-only deps (pytest plugins, aiosqlite, …) conventionally live in a
+    # sibling requirements-dev.txt; without them collection ERRORS and the
+    # gate reports phantom failures. Install it too, and key the cache on it.
+    dev = requirements.parent / "requirements-dev.txt"
     req_text = requirements.read_text(errors="replace")
+    if dev.is_file():
+        req_text += "\n" + dev.read_text(errors="replace")
     key = hashlib.sha256(f"{repo}\n{req_text}".encode()).hexdigest()[:12]
     venv = Path(tempfile.gettempdir()) / f"genesis-gate-venv-{key}"
     py = _venv_python(venv)
@@ -80,11 +87,23 @@ def _ensure_app_venv(repo: Path, requirements: Path) -> tuple[Path | None, str]:
     if not py.exists():
         return None, "venv python not found after creation"
 
-    install = run_cmd(
-        [str(py), "-m", "pip", "install", "-q", "--disable-pip-version-check",
-         "-r", str(requirements), "pytest"],
-        timeout=600,
-    )
+    def _install():
+        args = [str(py), "-m", "pip", "install", "-q", "--disable-pip-version-check",
+                "-r", str(requirements)]
+        if dev.is_file():
+            args += ["-r", str(dev)]
+        return run_cmd([*args, "pytest"], timeout=600)
+
+    install = _install()
+    if not install.ok or install.rc != 0:
+        # A cached venv whose base interpreter was upgraded/removed (e.g. a
+        # Homebrew Python bump) still has a working `python` symlink but its
+        # pip resolves to the SYSTEM environment and trips PEP 668. Rebuild
+        # the venv from scratch once before giving up.
+        shutil.rmtree(venv, ignore_errors=True)
+        made = run_cmd([sys.executable, "-m", "venv", str(venv)], timeout=120)
+        if made.ok and made.rc == 0 and py.exists():
+            install = _install()
     if not install.ok or install.rc != 0:
         return None, f"dependency install failed: {(install.stderr or install.stdout)[-300:]}"
     marker.write_text("ok")
@@ -153,7 +172,11 @@ class PytestProvider(Provider):
                 )
 
         timeout = int(self.settings.get("timeout", 300))
-        res = run_cmd([*cmd, "-q"], cwd=str(repo), timeout=timeout)
+        # Run where the app actually lives: tests in backend/tests do
+        # `import app`, which only resolves with backend/ as cwd. When the
+        # requirements file was found in a subdir, that subdir IS the app.
+        app_dir = requirements.parent if requirements is not None else repo
+        res = run_cmd([*cmd, "-q"], cwd=str(app_dir), timeout=timeout)
         output = (res.stdout or "") + "\n" + (res.stderr or "")
 
         if res.timed_out:

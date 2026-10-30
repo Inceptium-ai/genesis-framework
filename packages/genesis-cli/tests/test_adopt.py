@@ -50,6 +50,23 @@ def test_run_audit_shapes_and_findings(tmp_path):
     assert abs(sum(c["points"] for c in r["categories"]) - r["score"]) < 0.2
 
 
+def test_documented_env_var_is_not_an_env_hygiene_gap(tmp_path):
+    """env_hygiene must measure declaration, not what this machine holds.
+
+    The seeded repo references ${API_SECRET_KEY} with no default; documenting
+    it in `.env.example` is exactly the fix the report asks for, so the gap has
+    to clear — previously it did not, which pinned the category at 0/10 in any
+    checkout whose compose files reference undefaulted vars.
+    """
+    repo = _seed_repo(tmp_path)
+    (repo / ".env.example").write_text("API_SECRET_KEY=\n")
+    report = run_audit(repo)
+    assert report["env"]["missing_required"] == []
+    env_cat = next(c for c in report["readiness"]["categories"]
+                   if c["key"] == "env_hygiene")
+    assert env_cat["points"] > 0
+
+
 def test_renderers_and_agents_md(tmp_path):
     report = run_audit(_seed_repo(tmp_path))
     term = render_terminal(report)

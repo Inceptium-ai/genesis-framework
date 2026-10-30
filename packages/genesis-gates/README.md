@@ -22,7 +22,10 @@ Most people want the CLI instead: `pip install genesis-cli`.
 gate reports in.
 
 **Gates** (`genesis_gates.gates`) — secret-scan, dependency-scan, unit-tests
-(run in an isolated venv built from the app's own requirements), SAST, SBOM.
+(run in an isolated venv built from the app's own requirements), SAST, SBOM,
+design-lint (a deterministic ban list for known AI-slop UI patterns — gradient
+text, default glassmorphism, particle backgrounds — extensible per project via
+`.genesis/design-rules.yaml`).
 
 **Analysis** (`genesis_gates.analysis`) — the layer that catches what scanners
 can't:

@@ -4,6 +4,17 @@
 reports findings, so results are parsed from the JSON regardless of exit code.
 Findings present -> `failed`, none -> `passed`, semgrep absent -> `skipped`,
 scan/parse error -> `error`.
+
+Settings (`.genesis/config.yaml` → `gates.sast`):
+
+- ``timeout`` — seconds (default 120).
+- ``skip_dirs`` — repo-relative directories to leave out of the scan, one
+  ``--exclude`` flag each (see `genesis_gates.util.configured_skip_dirs`).
+  A bare semgrep ``--exclude foo`` matches *any* path segment named ``foo``
+  anywhere in the tree; the leading ``./`` this provider adds anchors the
+  pattern at the scan root, so ``vendor`` excludes ``<repo>/vendor`` and not
+  ``<repo>/packages/x/vendor`` — the same repo-relative meaning trivy's
+  ``--skip-dirs`` has. Nested trees are listed explicitly (``packages/x/vendor``).
 """
 from __future__ import annotations
 
@@ -13,7 +24,7 @@ from pathlib import Path
 
 from ..engine.base import Finding, GateContext, GateResult, GateStatus, Severity
 from ..engine.provider import Provider, register_provider
-from ..util import map_severity, run_cmd, which
+from ..util import configured_skip_dirs, map_severity, run_cmd, which
 
 
 def _findings_from_semgrep(gate: str, raw: str) -> list[Finding]:
@@ -63,10 +74,12 @@ class SemgrepProvider(Provider):
 
         repo = str(Path(ctx.repo_path))
         timeout = int(self.settings.get("timeout", 120))
-        res = run_cmd(
-            ["semgrep", "--config", "auto", "--json", "--quiet", repo],
-            timeout=timeout,
-        )
+        cmd = ["semgrep", "--config", "auto", "--json", "--quiet"]
+        # "./" anchors the pattern at the scan root (a bare name would also
+        # exclude same-named directories nested anywhere in the tree).
+        for skipped in configured_skip_dirs(self.settings):
+            cmd += ["--exclude", f"./{skipped}"]
+        res = run_cmd([*cmd, repo], timeout=timeout)
         if res.timed_out:
             return GateResult(
                 gate=self.key, status=GateStatus.error,

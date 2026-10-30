@@ -1,6 +1,6 @@
 [project]
 name = "genesis-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Genesis Agent Workbench CLI — make any repo agent-ready and keep AI-generated changes governed."
 readme = "README.md"
 license = "Apache-2.0"
@@ -30,8 +30,10 @@ dependencies = [
     # Must stay a REAL version requirement: `[tool.uv.sources]` below is a
     # dev-only workspace override and is not written into published metadata,
     # so this is what `pip install genesis-cli` resolves against on PyPI.
-    "genesis-gates>=0.1.0",
+    "genesis-gates>=0.2.0",
     "pyyaml>=6.0",
+    # `genesis runner` talks to a Genesis server over HTTP.
+    "httpx>=0.27",
 ]
 
 [project.urls]

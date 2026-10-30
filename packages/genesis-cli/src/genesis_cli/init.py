@@ -104,6 +104,13 @@ kind: GateConfig
 #   dependency-scan:
 #     provider: trivy
 #     fail_on_severity: critical
+#     # Trees this repo does not author and is not accountable for: vendored
+#     # dependencies, generated output, packaged sample apps that are scanned
+#     # in their own right. Repo-relative, anchored at the root ("vendor" does
+#     # not match "packages/x/vendor"). This is SCOPE, not suppression — a
+#     # skipped directory is invisible to the gate, so justify each entry in a
+#     # comment and keep your own source, infra and CI in scope.
+#     skip_dirs: [vendor, third_party/generated]
 #   unit-tests:
 #     provider: command
 #     command: "npm test"

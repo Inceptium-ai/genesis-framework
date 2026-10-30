@@ -11,7 +11,62 @@ PyPI (see `.github/workflows/release.yml`).
 
 ## [Unreleased]
 
-## [0.1.0] — unreleased
+## [0.2.0] — 2026-10-30
+
+### Added
+
+- **`genesis runner`** — run a Genesis server's coding-agent tasks on your own
+  machine, against your own Claude Code subscription, instead of an API key.
+  The server stays the control plane: it renders the prompt, validates the
+  result, runs the gates, and makes the commit — the runner only executes the
+  agent and hands back changed files.
+  - `genesis runner connect --server URL` — store a runner token
+    (`~/.genesis/runner.toml`, mode 0600; `GENESIS_RUNNER_HOME` to relocate).
+    The token is minted in the Genesis console under Settings → Runners and
+    shown once.
+  - `genesis runner start` — claim work and execute it through the local
+    `claude` CLI, streaming progress back to the run's live log.
+  - `genesis runner status` — whether a token is configured and whether the
+    server currently sees this runner.
+  - Requires the `claude` CLI on PATH and logged in. Workspaces are
+    materialized under `~/.genesis/runner-work/`; `.env*` files are never
+    shipped in either direction, and extraction rejects path traversal,
+    absolute members and symlinks.
+  - No API key is involved at any point, and runner-executed work never debits
+    Genesis credits.
+
+- **`skip_dirs` gate setting** — per-gate, repo-relative directories a scanner
+  must not look at, for trees a repo does not author: vendored dependencies,
+  generated output, packaged sample apps that are scanned in their own right.
+  `gates.dependency-scan.skip_dirs: [vendor, third_party/generated]` becomes
+  trivy `--skip-dirs`, and `gates.sast.skip_dirs` becomes semgrep `--exclude`,
+  anchored at the repo root (`vendor` does not match `packages/x/vendor`).
+  The exclusion is applied by the scanner, not by filtering its findings, so
+  the evidence package records what was actually scanned. It is scope, not
+  suppression — a skipped directory is invisible to the gate. `secret-scan`
+  (gitleaks) takes its path allowlist from the repo's `.gitleaks.toml` instead.
+- **design-lint gate** — deterministic detection of known AI-slop design
+  patterns in UI code (gradient-clipped text, blue→purple→pink gradients,
+  default glassmorphism, pulsing glow CTAs, decorative blur blobs,
+  particle/nebula canvases, emoji iconography, the eyebrow-heading formula,
+  three-stop surface gradients). Pure stdlib, always available. Configurable
+  per project: `disable: [G3]` to drop a rule, `rules_file:
+  .genesis/design-rules.yaml` to add your own `{id, name, pattern, severity,
+  remediation}` rules. Runs on `*.html/css/js/jsx/ts/tsx/vue/svelte`,
+  skipping build output and vendored trees.
+
+### Changed
+
+- **`genesis adopt` now credits a repo's declared env contract.** The
+  env_hygiene category previously flagged every `${VAR}` a compose file
+  references without a default, even when the repo documents it; the keys in
+  `.env.example` (and `.env.sample` / `.env.template`, any
+  `.env.<stage>.example`, plus a local `.env`) now count as declarations, so
+  the score measures whether configuration is documented rather than whether
+  the machine running the audit happens to hold values. Only key names are
+  read; values are never parsed or reported.
+
+## [0.1.0] — 2026-08-09
 
 First public release. Everything below is new.
 

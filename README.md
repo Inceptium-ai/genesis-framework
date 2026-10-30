@@ -75,7 +75,7 @@ pull requests are welcome here — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Package | What it is |
 |---|---|
-| `packages/genesis-gates` | Gate engine (secret-scan, dependency-scan, unit-tests, SAST, SBOM…), analysis layer (system-completeness profiles, env reconciliation, readiness scoring, risk classification), JSON Schema contracts |
+| `packages/genesis-gates` | Gate engine (secret-scan, dependency-scan, unit-tests, SAST, SBOM, design-lint…), analysis layer (system-completeness profiles, env reconciliation, readiness scoring, risk classification), JSON Schema contracts |
 | `packages/genesis-cli` | The `genesis` command: `adopt`, `init`; SARIF/JSON/HTML reports; AGENTS.md generation; the GitHub Action |
 
 Both are released together from this repository: a `v*` tag builds and publishes

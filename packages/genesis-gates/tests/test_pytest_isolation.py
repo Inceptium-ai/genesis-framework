@@ -40,3 +40,30 @@ def test_uninstallable_requirements_skip_not_fail(tmp_path: Path):
     res = prov.run(GateContext(repo_path=tmp_path, manifest={}, config={}))
     assert res.status == GateStatus.skipped
     assert "could not prepare test env" in res.summary
+
+
+def test_pytest_runs_from_app_dir_when_requirements_nested(tmp_path: Path, monkeypatch):
+    """backend/tests do `import app` — only resolvable with backend/ as cwd.
+    The provider must run pytest from the requirements file's directory."""
+    from genesis_gates.providers import pytest_provider as pp
+
+    be = tmp_path / "backend"
+    (be / "tests").mkdir(parents=True)
+    (be / "requirements.txt").write_text("")
+    (be / "tests" / "test_x.py").write_text("def test_ok():\n    assert True\n")
+
+    seen = {}
+
+    def fake_run_cmd(cmd, cwd=None, timeout=0):
+        seen["cwd"] = cwd
+        class R:
+            ok, rc, stdout, stderr, timed_out = True, 0, "1 passed", "", False
+        return R()
+
+    monkeypatch.setattr(pp, "run_cmd", fake_run_cmd)
+    monkeypatch.setattr(pp, "_ensure_app_venv",
+                        lambda repo, req: (be / ".fake-python", ""))
+    from genesis_gates.engine.base import GateContext
+    ctx = GateContext(repo_path=str(tmp_path), manifest={}, config={})
+    pp.PytestProvider().run(ctx)
+    assert seen["cwd"] == str(be)
