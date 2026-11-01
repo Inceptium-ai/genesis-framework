@@ -15,6 +15,12 @@ import httpx
 _CLAIM_TIMEOUT = httpx.Timeout(10.0, read=60.0)
 _IO_TIMEOUT = httpx.Timeout(10.0, read=300.0)
 
+# What this client can serve, advertised on every claim (0.3.0+). 'completion'
+# = one-shot planning LLM calls through the local `claude` CLI, no workspace.
+# Additive wire change: an 0.2.0 server has no body on /claim and ignores it;
+# an 0.3.0 server hands completion items only to claims that advertise it.
+CAPABILITIES = ("completion",)
+
 
 class RunnerAuthError(RuntimeError):
     """The server rejected the runner token (bad, rotated, or revoked)."""
@@ -49,7 +55,10 @@ class RunnerClient:
 
     async def claim(self) -> dict | None:
         """One long-poll. None = no work this window (poll again)."""
-        resp = await self._client.post("/api/runner/claim", timeout=_CLAIM_TIMEOUT)
+        resp = await self._client.post(
+            "/api/runner/claim", json={"capabilities": list(CAPABILITIES)},
+            timeout=_CLAIM_TIMEOUT,
+        )
         self._check_auth(resp)
         if resp.status_code == 204:
             return None

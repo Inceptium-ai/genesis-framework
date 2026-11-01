@@ -101,6 +101,15 @@ def status() -> int:
         _say(f"Auth   : unreachable ({exc})")
         return 1
     _say(f"Auth   : {'ok' if auth_ok else 'REJECTED — reconnect with a fresh token'}")
+    # Planning routing: the capability is advertised on every claim; there is
+    # no cheap server query for the ack, so report the client side honestly.
+    from .client import CAPABILITIES
+
+    if "completion" in CAPABILITIES:
+        _say("Planning: this runner advertises 'completion' — while "
+             "`genesis runner start` is running, the server routes your "
+             "planning calls here (needs a 0.3.0+ server; older servers "
+             "ignore it and use builds only).")
     return 0 if (ok and auth_ok) else 1
 
 
@@ -165,11 +174,49 @@ async def _start(cfg: dict) -> int:
                 continue
             if item is None:
                 continue
-            await _run_item(client, item, stop)
+            if item.get("kind") == "completion":
+                await _run_completion_item(client, item, stop)
+            else:
+                await _run_item(client, item, stop)
     finally:
         await client.aclose()
     _say("Runner stopped.")
     return 0
+
+
+async def _run_completion_item(client: RunnerClient, item: dict,
+                               stop: _Stop) -> None:
+    """One planning completion (0.3.0): no workspace in either direction —
+    run the local `claude` in one-shot print mode and post the text back."""
+    item_id = str(item.get("item_id"))
+    task = item.get("task") or {}
+    _say(f"▶ planning call (item {item_id[:12]}…) — running claude one-shot")
+    driver = ClaudeDriver()
+    stop.driver = driver
+    try:
+        result = await driver.run_completion(
+            system=str(task.get("system") or "") or None,
+            messages=list(task.get("messages") or []),
+            max_tokens=int(task.get("max_tokens") or 4096),
+        )
+    except Exception as exc:  # noqa: BLE001 — report, never crash the loop
+        result = {"status": "failed", "text": None, "usage": {},
+                  "error": f"runner error: {exc}"[:500]}
+    finally:
+        stop.driver = None
+    payload = {
+        "status": result.get("status", "failed"),
+        "text": result.get("text"),
+        "session_id": None,
+        "error": result.get("error"),
+        "usage": result.get("usage") or {},
+        "deleted": [],
+    }
+    try:
+        await client.post_result(item_id, payload)
+        _say(f"✓ planning call: {payload['status']}")
+    except (httpx.HTTPError, RunnerAuthError) as exc:
+        _say(f"✗ planning call: result upload failed ({exc.__class__.__name__})")
 
 
 async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:

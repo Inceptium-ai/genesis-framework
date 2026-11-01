@@ -6,6 +6,12 @@ Runs `claude -p <prompt> --output-format stream-json` as an argv subprocess
 (never a shell) with cwd = the task workspace. The child env is a pass-through
 of the login environment with ANTHROPIC_API_KEY explicitly UNSET so the CLI
 uses the user's subscription auth and never silently bills an API key.
+
+Planning completions (0.3.0) use the same CLI in ONE-SHOT print mode —
+`claude -p <prompt> --output-format json --system-prompt <system> --tools ""
+--no-session-persistence` — run in a private empty directory with all tools
+disabled: a pure text-in/text-out LLM call, parsed from the single result
+JSON object (any non-JSON wrapper noise stripped).
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -58,6 +65,56 @@ def _assistant_text(evt: dict) -> str:
         for p in parts
         if isinstance(p, dict) and p.get("type") == "text"
     )
+
+
+def _flatten_messages(messages: list[dict]) -> str:
+    """One-shot print mode takes a single prompt, so a conversation (e.g. the
+    server's schema-repair retry: user, assistant, user) is flattened with
+    role tags. A single user message passes through untagged."""
+    if len(messages) == 1 and messages[0].get("role") == "user":
+        return str(messages[0].get("content") or "")
+    parts = []
+    for m in messages:
+        role = str(m.get("role") or "user").upper()
+        parts.append(f"[{role}]\n{m.get('content') or ''}")
+    return "\n\n".join(parts)
+
+
+def _final_json_object(stdout: str) -> dict | None:
+    """The result object from `--output-format json` stdout, tolerating any
+    non-JSON wrapper lines (update notices, MOTD) before or after it."""
+    text = stdout.strip()
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+    # Line-wise, last parseable object wins (the result is printed last).
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    # Last resort: scan for embedded objects; the last decodable one wins.
+    dec = json.JSONDecoder()
+    best: dict | None = None
+    i = text.find("{")
+    while i != -1:
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict):
+            best = obj
+        i = text.find("{", end)
+    return best
 
 
 def check_cli() -> tuple[bool, str]:
@@ -183,3 +240,80 @@ class ClaudeDriver:
         usage["duration_s"] = time.monotonic() - started
         return {"status": status, "session_id": session_id,
                 "usage": usage, "error": error}
+
+    async def run_completion(self, *, system: str | None, messages: list[dict],
+                             max_tokens: int = 4096,
+                             timeout_s: float = 150.0) -> dict:
+        """One planning completion (T-047): run `claude` in one-shot print
+        mode and return {status, text, usage, error}. Verified invocation:
+        `claude -p <prompt> --output-format json --system-prompt <system>
+        --tools "" --no-session-persistence` — a single result JSON object on
+        stdout whose `result` field is the model's text. Tools are disabled
+        and cwd is a throwaway empty directory: a pure LLM call, nothing on
+        this machine is read or written. The CLI exposes no max-tokens flag;
+        the server bounds output through the prompt contract instead.
+        """
+        del max_tokens  # accepted for wire-payload symmetry; see docstring
+        started = time.monotonic()
+        prompt = _flatten_messages(messages)
+        argv = [
+            "claude", "-p", prompt,
+            "--output-format", "json",
+            "--tools", "",
+            "--no-session-persistence",
+        ]
+        if system:
+            argv += ["--system-prompt", system]
+        if self.model:
+            argv += ["--model", self.model]
+
+        usage: dict = {"input_tokens": 0, "output_tokens": 0, "duration_s": None}
+        with tempfile.TemporaryDirectory(prefix="genesis-completion-") as empty:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    cwd=empty,
+                    env=self._child_env(),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=_STREAM_LIMIT,
+                )
+            except FileNotFoundError:
+                return {"status": "failed", "text": None, "usage": usage,
+                        "error": "claude CLI not found"}
+            self._proc = proc
+            try:
+                out_b, err_b = await asyncio.wait_for(proc.communicate(),
+                                                      timeout=timeout_s)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"status": "failed", "text": None, "usage": usage,
+                        "error": f"completion timed out after {timeout_s:.0f}s"}
+            except asyncio.CancelledError:
+                proc.kill()
+                raise
+            finally:
+                self._proc = None
+
+        usage["duration_s"] = time.monotonic() - started
+        if self.killed:
+            return {"status": "interrupted", "text": None, "usage": usage,
+                    "error": "completion aborted on the runner"}
+
+        evt = _final_json_object(out_b.decode("utf-8", "replace"))
+        if evt is None:
+            err = err_b.decode("utf-8", "replace")[:500]
+            return {"status": "failed", "text": None, "usage": usage,
+                    "error": err or f"claude exited {proc.returncode} "
+                                    "with no result JSON"}
+        u = evt.get("usage") or {}
+        usage["input_tokens"] = int(u.get("input_tokens") or 0)
+        usage["output_tokens"] = int(u.get("output_tokens") or 0)
+        text = evt.get("result")
+        if evt.get("is_error") or evt.get("subtype") != "success" \
+                or not isinstance(text, str):
+            return {"status": "failed", "text": None, "usage": usage,
+                    "error": str(evt.get("result") or "cli error")[:500]}
+        return {"status": "completed", "text": text, "usage": usage,
+                "error": None}

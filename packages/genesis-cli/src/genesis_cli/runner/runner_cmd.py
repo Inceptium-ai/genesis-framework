@@ -27,9 +27,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
 def add_runner_parser(sub: argparse._SubParsersAction) -> None:
     runner = sub.add_parser(
         "runner",
-        help="execute your Genesis builds' coding-agent tasks on THIS machine "
-             "with your local claude CLI (subscription) — the server keeps "
-             "orchestration, validation, gates, and billing",
+        help="execute your Genesis builds' coding-agent tasks AND planning "
+             "calls on THIS machine with your local claude CLI (subscription) "
+             "— the server keeps orchestration, validation, gates, and billing",
     )
     rsub = runner.add_subparsers(dest="runner_command", required=True)
 

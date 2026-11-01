@@ -11,6 +11,29 @@ PyPI (see `.github/workflows/release.yml`).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-31
+
+### Added
+
+- **`genesis runner` serves planning calls** — a connected runner now runs the
+  Genesis server's *planning* LLM calls (quick-start seeding, import
+  synthesis, dependency detection, the Advisor) on your own Claude
+  subscription too, not just the coding agent. Each call is one `claude`
+  one-shot print invocation (`claude -p … --output-format json --tools ""`)
+  in a throwaway empty directory with all tools disabled: pure text in, text
+  out — no workspace crosses the wire and nothing on your machine is read or
+  written.
+  - The runner advertises a `capabilities: ["completion"]` field on its claim
+    long-poll. The change is additive in both directions: a 0.2.0 server
+    ignores the field (builds only), and a 0.3.0 server never hands a
+    planning call to a 0.2.0 runner (no capability advertised).
+  - `genesis runner status` reports whether this client advertises planning
+    support.
+  - When the runner is offline or doesn't answer in time, the server falls
+    back to its normal provider path automatically.
+- `genesis-gates` 0.3.0 is a version-lockstep release (the two packages ship
+  together); it contains no gate-engine changes.
+
 ## [0.2.0] — 2026-10-30
 
 ### Added

@@ -1,6 +1,6 @@
 [project]
 name = "genesis-gates"
-version = "0.2.0"
+version = "0.3.0"
 description = "Genesis delivery-governance gate engine: deterministic gates, system-completeness analysis, readiness scoring, and versioned JSON Schema contracts."
 readme = "README.md"
 license = "Apache-2.0"
