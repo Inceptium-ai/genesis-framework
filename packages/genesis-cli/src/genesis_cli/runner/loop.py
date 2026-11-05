@@ -20,17 +20,74 @@ import sys
 import httpx
 
 from .claude_driver import ClaudeDriver, check_cli
-from .client import RunnerAuthError, RunnerClient
+from .client import RunnerAuthError, RunnerClient, own_version
 from .config import config_path, load_config, save_config, work_root
 from .workspace import build_result_tar, diff, manifest, safe_extract
 
 _EVENT_FLUSH_S = 1.0
 _CLAIM_BACKOFF_S = 5.0
+_NUDGE_EVERY_S = 3600.0
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _say(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _ver_tuple(v: str | None) -> tuple[int, ...]:
+    out: list[int] = []
+    for part in (v or "").split(".")[:4]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out) or (0,)
+
+
+def _newer_available(client: RunnerClient) -> str | None:
+    """The advertised version, when it beats what's running here."""
+    latest = client.latest_advertised
+    if latest and _ver_tuple(latest) > _ver_tuple(own_version()):
+        return latest
+    return None
+
+
+# ── self-update ──────────────────────────────────────────────────────────────
+
+def update() -> int:
+    """Upgrade genesis-cli in place: pipx when it manages this install,
+    else pip. Only ever upgrades THIS package from PyPI — the server can
+    name a version, never a package or URL."""
+    import subprocess
+
+    if shutil.which("pipx"):
+        try:
+            listing = subprocess.run(["pipx", "list", "--short"],
+                                     capture_output=True, text=True,
+                                     timeout=60).stdout
+        except Exception:  # noqa: BLE001 — fall through to pip
+            listing = ""
+        if "genesis-cli" in listing:
+            rc = subprocess.run(["pipx", "upgrade", "genesis-cli"]).returncode
+            if rc == 0:
+                _say("genesis-cli upgraded (pipx). Restart the runner to use it.")
+            return rc
+    rc = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade",
+                         "genesis-cli"]).returncode
+    if rc == 0:
+        _say("genesis-cli upgraded (pip). Restart the runner to use it.")
+    return rc
+
+
+def _self_update_and_reexec(latest: str) -> None:
+    """--auto-update, between work items only: upgrade and re-exec this same
+    command line so the new code takes over with the same flags."""
+    import os
+
+    _say(f"auto-update: upgrading genesis-cli to {latest} …")
+    if update() != 0:
+        _say("auto-update failed — continuing on the current version.")
+        return
+    _say("auto-update: restarting the runner …")
+    os.execvp(sys.argv[0], sys.argv)
 
 
 # ── connect ───────────────────────────────────────────────────────────────────
@@ -131,7 +188,7 @@ class _Stop:
             self.driver.kill()
 
 
-def start() -> int:
+def start(auto_update: bool = False) -> int:
     cfg = load_config()
     if not cfg.get("server") or not cfg.get("token"):
         print("error: not connected — run `genesis runner connect --server <URL>` "
@@ -143,13 +200,14 @@ def start() -> int:
         return 2
     _say(f"claude CLI: {detail}")
     try:
-        return asyncio.run(_start(cfg))
+        return asyncio.run(_start(cfg, auto_update=auto_update))
     except KeyboardInterrupt:
         return 0
 
 
-async def _start(cfg: dict) -> int:
+async def _start(cfg: dict, auto_update: bool = False) -> int:
     import signal
+    import time as _time
 
     client = RunnerClient(cfg["server"], cfg["token"])
     stop = _Stop()
@@ -160,6 +218,7 @@ async def _start(cfg: dict) -> int:
         pass  # non-Unix: KeyboardInterrupt still lands in start()
 
     _say(f"Runner {cfg.get('name', '?')!r} polling {cfg['server']} for work. Ctrl-C to stop.")
+    last_nudge = 0.0
     try:
         while not stop.stopping:
             try:
@@ -172,6 +231,18 @@ async def _start(cfg: dict) -> int:
                      f"{_CLAIM_BACKOFF_S:.0f}s…")
                 await asyncio.sleep(_CLAIM_BACKOFF_S)
                 continue
+            # Update handling, BETWEEN items only (never mid-task): with
+            # --auto-update, upgrade + re-exec; otherwise an hourly nudge.
+            latest = _newer_available(client)
+            if latest and item is None:
+                if auto_update:
+                    _self_update_and_reexec(latest)  # only returns on failure
+                    last_nudge = _time.monotonic()
+                elif _time.monotonic() - last_nudge > _NUDGE_EVERY_S:
+                    _say(f"⬆ genesis-cli {latest} is available (you run "
+                         f"{own_version() or 'unknown'}) — run "
+                         "`genesis runner update`, or start with --auto-update.")
+                    last_nudge = _time.monotonic()
             if item is None:
                 continue
             if item.get("kind") == "completion":
@@ -191,7 +262,10 @@ async def _run_completion_item(client: RunnerClient, item: dict,
     item_id = str(item.get("item_id"))
     task = item.get("task") or {}
     _say(f"▶ planning call (item {item_id[:12]}…) — running claude one-shot")
-    driver = ClaudeDriver()
+    # The server names the model (claude CLI alias — planning defaults to the
+    # latest Opus); absent (older server), "opus" rather than the machine's
+    # personal claude default.
+    driver = ClaudeDriver(model=str(task.get("model") or "opus"))
     stop.driver = driver
     try:
         result = await driver.run_completion(
@@ -235,7 +309,10 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
     def on_text(text: str) -> None:
         events.append({"type": "agent_message", "data": {"text": text}})
 
-    driver = ClaudeDriver()
+    # The server names the model (claude CLI alias — builds default to the
+    # latest Sonnet); absent (older server), "sonnet" rather than the
+    # machine's personal claude default.
+    driver = ClaudeDriver(model=str(task.get("model") or "sonnet"))
     stop.driver = driver
 
     async def flusher() -> None:

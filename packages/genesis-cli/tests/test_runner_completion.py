@@ -138,7 +138,9 @@ async def test_claim_advertises_capabilities(monkeypatch):
     finally:
         await client.aclose()
     assert captured["url"] == "/api/runner/claim"
-    assert captured["json"] == {"capabilities": ["completion"]}
+    assert captured["json"]["capabilities"] == ["completion"]
+    # 0.3.1 also advertises its version when package metadata is present.
+    assert set(captured["json"]) <= {"capabilities", "version"}
 
 
 async def test_loop_runs_completion_item_and_posts_text(fake_claude):
@@ -165,3 +167,69 @@ async def test_loop_runs_completion_item_and_posts_text(fake_claude):
     assert payload["status"] == "completed"
     assert payload["text"] == '{"name": "zed"}'
     assert payload["deleted"] == [] and payload["session_id"] is None
+
+
+async def test_completion_driver_model_from_task_with_opus_fallback(monkeypatch):
+    """The server names the claude model alias per item (planning → opus);
+    an older server omits it and the driver still pins 'opus' rather than
+    inheriting the machine's personal claude default."""
+    from genesis_cli.runner import loop as loop_mod
+
+    seen: list[str | None] = []
+
+    class _FakeDriver:
+        def __init__(self, model=None):
+            seen.append(model)
+            self.model = model
+
+        async def run_completion(self, **kw):
+            return {"status": "completed", "text": "{}", "usage": {}}
+
+    class _FakeClient:
+        async def post_result(self, item_id, payload, tar_path=None):
+            return None
+
+    monkeypatch.setattr(loop_mod, "ClaudeDriver", _FakeDriver)
+    stop = loop_mod._Stop()
+    await loop_mod._run_completion_item(_FakeClient(), {
+        "item_id": "i1", "task": {"messages": [{"role": "user", "content": "x"}],
+                                  "model": "opus"}}, stop)
+    await loop_mod._run_completion_item(_FakeClient(), {
+        "item_id": "i2", "task": {"messages": [{"role": "user", "content": "x"}]}},
+        stop)
+    assert seen == ["opus", "opus"]
+
+
+async def test_claim_sends_version_and_captures_latest_header(monkeypatch):
+    from genesis_cli.runner import client as client_mod
+
+    monkeypatch.setattr(client_mod, "own_version", lambda: "0.3.1")
+    client = RunnerClient("http://test", "grt_x")
+    captured: dict = {}
+
+    async def fake_post(url, **kw):
+        captured["json"] = kw.get("json")
+        return httpx.Response(
+            204, headers={"X-Genesis-Runner-Latest": "0.4.0"},
+            request=httpx.Request("POST", f"http://test{url}"))
+
+    monkeypatch.setattr(client._client, "post", fake_post)
+    try:
+        assert await client.claim() is None
+    finally:
+        await client.aclose()
+    assert captured["json"]["version"] == "0.3.1"
+    assert client.latest_advertised == "0.4.0"
+
+
+def test_newer_available_compare(monkeypatch):
+    from genesis_cli.runner import loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "own_version", lambda: "0.3.1")
+    client = RunnerClient("http://test", "grt_x")
+    client.latest_advertised = "0.3.1"
+    assert loop_mod._newer_available(client) is None
+    client.latest_advertised = "0.10.0"
+    assert loop_mod._newer_available(client) == "0.10.0"
+    client.latest_advertised = None
+    assert loop_mod._newer_available(client) is None

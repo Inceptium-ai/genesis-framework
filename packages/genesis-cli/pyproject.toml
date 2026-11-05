@@ -1,6 +1,6 @@
 [project]
 name = "genesis-cli"
-version = "0.3.0"
+version = "0.3.1"
 description = "Genesis Agent Workbench CLI — make any repo agent-ready and keep AI-generated changes governed."
 readme = "README.md"
 license = "Apache-2.0"

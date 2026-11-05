@@ -26,6 +26,15 @@ class RunnerAuthError(RuntimeError):
     """The server rejected the runner token (bad, rotated, or revoked)."""
 
 
+def own_version() -> str | None:
+    try:
+        from importlib.metadata import version
+
+        return version("genesis-cli")
+    except Exception:  # noqa: BLE001 — dev checkouts without metadata
+        return None
+
+
 class RunnerClient:
     def __init__(self, server: str, token: str):
         self._client = httpx.AsyncClient(
@@ -33,6 +42,9 @@ class RunnerClient:
             headers={"Authorization": f"Bearer {token}"},
             timeout=_IO_TIMEOUT,
         )
+        # The newest runner version the server has advertised (claim response
+        # header, 0.3.1+ servers). None until a claim answers / older server.
+        self.latest_advertised: str | None = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -55,11 +67,17 @@ class RunnerClient:
 
     async def claim(self) -> dict | None:
         """One long-poll. None = no work this window (poll again)."""
+        body: dict = {"capabilities": list(CAPABILITIES)}
+        ver = own_version()
+        if ver:
+            body["version"] = ver
         resp = await self._client.post(
-            "/api/runner/claim", json={"capabilities": list(CAPABILITIES)},
-            timeout=_CLAIM_TIMEOUT,
+            "/api/runner/claim", json=body, timeout=_CLAIM_TIMEOUT,
         )
         self._check_auth(resp)
+        latest = resp.headers.get("X-Genesis-Runner-Latest")
+        if latest:
+            self.latest_advertised = latest.strip()[:32]
         if resp.status_code == 204:
             return None
         resp.raise_for_status()

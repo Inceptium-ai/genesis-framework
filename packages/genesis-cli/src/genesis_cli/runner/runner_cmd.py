@@ -15,7 +15,13 @@ def _cmd_connect(args: argparse.Namespace) -> int:
 def _cmd_start(args: argparse.Namespace) -> int:
     from .loop import start
 
-    return start()
+    return start(auto_update=args.auto_update)
+
+
+def _cmd_update(args: argparse.Namespace) -> int:
+    from .loop import update
+
+    return update()
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -46,7 +52,16 @@ def add_runner_parser(sub: argparse._SubParsersAction) -> None:
     start = rsub.add_parser(
         "start", help="poll for work and run tasks locally (Ctrl-C to stop; "
                       "twice to abort the current task)")
+    start.add_argument(
+        "--auto-update", action="store_true",
+        help="when the server advertises a newer genesis-cli, upgrade (from "
+             "PyPI only) between tasks and restart automatically")
     start.set_defaults(func=_cmd_start)
+
+    update = rsub.add_parser(
+        "update", help="upgrade genesis-cli in place (pipx when it manages "
+                       "this install, else pip), then restart the runner")
+    update.set_defaults(func=_cmd_update)
 
     status = rsub.add_parser("status", help="show connection, claude CLI and "
                                             "auth status")
