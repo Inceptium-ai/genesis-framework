@@ -19,7 +19,10 @@ _IO_TIMEOUT = httpx.Timeout(10.0, read=300.0)
 # = one-shot planning LLM calls through the local `claude` CLI, no workspace.
 # Additive wire change: an 0.2.0 server has no body on /claim and ignores it;
 # an 0.3.0 server hands completion items only to claims that advertise it.
-CAPABILITIES = ("completion",)
+# 'resume' (0.3.2+): this client keeps ONE directory per task across repair
+# rounds, so a claude session id from round N is resumable in round N+1. The
+# server strips resume_session for clients that do not advertise it.
+CAPABILITIES = ("completion", "resume")
 
 
 class RunnerAuthError(RuntimeError):

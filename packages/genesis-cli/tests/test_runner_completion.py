@@ -138,7 +138,7 @@ async def test_claim_advertises_capabilities(monkeypatch):
     finally:
         await client.aclose()
     assert captured["url"] == "/api/runner/claim"
-    assert captured["json"]["capabilities"] == ["completion"]
+    assert captured["json"]["capabilities"] == ["completion", "resume"]
     # 0.3.1 also advertises its version when package metadata is present.
     assert set(captured["json"]) <= {"capabilities", "version"}
 
@@ -178,7 +178,7 @@ async def test_completion_driver_model_from_task_with_opus_fallback(monkeypatch)
     seen: list[str | None] = []
 
     class _FakeDriver:
-        def __init__(self, model=None):
+        def __init__(self, model=None, **_kw):
             seen.append(model)
             self.model = model
 
@@ -233,3 +233,132 @@ def test_newer_available_compare(monkeypatch):
     assert loop_mod._newer_available(client) == "0.10.0"
     client.latest_advertised = None
     assert loop_mod._newer_available(client) is None
+
+
+def test_cli_model_only_passes_names_the_cli_accepts():
+    from genesis_cli.runner.claude_driver import ClaudeDriver, cli_model
+
+    assert cli_model("anthropic/claude-sonnet-4.5") == "sonnet"
+    assert cli_model("sonnet") == "sonnet"
+    assert cli_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert cli_model("openai/gpt-5") is None
+    assert cli_model(None) is None
+    assert ClaudeDriver(model="anthropic/claude-opus-5.5").model == "opus"
+
+
+def test_auto_update_does_not_reexec_when_version_did_not_change(monkeypatch):
+    """A server can advertise a version the index doesn't serve yet; the
+    'upgrade' then succeeds as a no-op and re-exec would loop forever."""
+    from genesis_cli.runner import loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "own_version", lambda: "0.3.1")
+    monkeypatch.setattr(loop_mod, "update", lambda: 0)
+    called = []
+    monkeypatch.setattr("os.execvp", lambda *a: called.append(a))
+    loop_mod._self_update_and_reexec("0.3.2")
+    assert called == []
+
+    versions = iter(["0.3.1", "0.3.2"])
+    monkeypatch.setattr(loop_mod, "own_version", lambda: next(versions))
+    loop_mod._self_update_and_reexec("0.3.2")
+    assert len(called) == 1
+
+
+def test_allowed_tools_narrows_server_list_to_runner_set():
+    from genesis_cli.runner.claude_driver import RUNNER_COMMANDS, allowed_tools
+
+    # Server names commands: only those this machine permits survive.
+    assert allowed_tools(["node", "npm", "curl", "docker", "git"]) == [
+        "Bash(node:*)", "Bash(npm:*)"]
+    # Server names none: the whole runner toolchain set.
+    assert len(allowed_tools(None)) == len(RUNNER_COMMANDS)
+    assert "Bash(pytest:*)" in allowed_tools([])
+    for banned in ("curl", "wget", "docker", "git", "rm", "sh", "bash"):
+        assert banned not in RUNNER_COMMANDS
+
+
+def test_result_error_reads_errors_list():
+    from genesis_cli.runner.claude_driver import _result_error
+
+    assert _result_error({"is_error": True, "errors": [
+        "No conversation found with session ID: abc"]}).startswith("No conversation")
+    assert _result_error({"result": "boom"}) == "boom"
+    assert _result_error({"subtype": "error_max_turns"}) == "error_max_turns"
+    assert _result_error({}) == "cli error"
+
+
+async def test_unresumable_session_falls_back_to_fresh_run(monkeypatch, tmp_path):
+    from genesis_cli.runner.claude_driver import ClaudeDriver
+
+    calls: list[str | None] = []
+
+    async def fake_once(self, prompt, *, workdir, resume_session=None, on_text=None):
+        calls.append(resume_session)
+        if resume_session:
+            return {"status": "failed", "session_id": None, "usage": {},
+                    "error": "No conversation found with session ID: s1"}
+        return {"status": "completed", "session_id": "s2", "usage": {}, "error": None}
+
+    monkeypatch.setattr(ClaudeDriver, "_run_once", fake_once)
+    out = await ClaudeDriver().run("p", workdir=tmp_path, resume_session="s1")
+    assert calls == ["s1", None]
+    assert out["status"] == "completed" and out["session_id"] == "s2"
+
+    # Any OTHER failure is returned as-is — no second run.
+    calls.clear()
+
+    async def fail_once(self, prompt, *, workdir, resume_session=None, on_text=None):
+        calls.append(resume_session)
+        return {"status": "failed", "session_id": "s1", "usage": {},
+                "error": "usage limit reached"}
+
+    monkeypatch.setattr(ClaudeDriver, "_run_once", fail_once)
+    out = await ClaudeDriver().run("p", workdir=tmp_path, resume_session="s1")
+    assert calls == ["s1"] and out["error"] == "usage limit reached"
+
+
+async def test_task_directory_is_stable_across_rounds(monkeypatch, tmp_path):
+    """claude keys sessions by directory: both rounds of one task must run in
+    the SAME path (rebuilt from the server archive each round)."""
+    import io
+    import tarfile
+
+    from genesis_cli.runner import loop as loop_mod
+
+    monkeypatch.setenv("GENESIS_RUNNER_HOME", str(tmp_path))
+    seen: list[tuple[str, list[str]]] = []
+
+    class _Driver:
+        def __init__(self, model=None, commands=None, **_kw):
+            self.commands = commands
+
+        async def run(self, prompt, *, workdir, resume_session=None, on_text=None):
+            seen.append((str(workdir), sorted(p.name for p in workdir.iterdir())))
+            (workdir / "leftover.txt").write_text("from this round")
+            return {"status": "completed", "session_id": "s", "usage": {}, "error": None}
+
+    class _Client:
+        async def download_workspace(self, item_id, dest):
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                data = b"x"
+                info = tarfile.TarInfo("a.txt")
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            dest.write_bytes(buf.getvalue())
+            return dest
+
+        async def post_events(self, item_id, events):
+            return False
+
+        async def post_result(self, item_id, payload, tar_path=None):
+            return None
+
+    monkeypatch.setattr(loop_mod, "ClaudeDriver", _Driver)
+    stop = loop_mod._Stop()
+    for item_id in ("item-1", "item-2"):
+        await loop_mod._run_item(_Client(), {"item_id": item_id, "task": {
+            "task_id": "V1_T1", "project_name": "proj", "prompt": "p"}}, stop)
+    assert seen[0][0] == seen[1][0]
+    # Round 2 starts from the server archive, not round 1's leftovers.
+    assert seen[1][1] == ["a.txt"]

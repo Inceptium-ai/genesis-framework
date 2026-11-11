@@ -19,7 +19,7 @@ import sys
 
 import httpx
 
-from .claude_driver import ClaudeDriver, check_cli
+from .claude_driver import ClaudeDriver, allowed_tools, check_cli
 from .client import RunnerAuthError, RunnerClient, own_version
 from .config import config_path, load_config, save_config, work_root
 from .workspace import build_result_tar, diff, manifest, safe_extract
@@ -82,9 +82,18 @@ def _self_update_and_reexec(latest: str) -> None:
     command line so the new code takes over with the same flags."""
     import os
 
+    before = own_version()
     _say(f"auto-update: upgrading genesis-cli to {latest} …")
     if update() != 0:
         _say("auto-update failed — continuing on the current version.")
+        return
+    after = own_version()
+    if _ver_tuple(after) <= _ver_tuple(before):
+        # The server advertised a version the package index doesn't serve yet
+        # (deploy landed before the release). Re-exec'ing here would restart
+        # into the same code and loop forever — keep running instead.
+        _say(f"auto-update: {latest} is not installable yet (still on "
+             f"{after or 'unknown'}) — will retry later.")
         return
     _say("auto-update: restarting the runner …")
     os.execvp(sys.argv[0], sys.argv)
@@ -178,6 +187,10 @@ class _Stop:
     def __init__(self) -> None:
         self.stopping = False
         self.driver: ClaudeDriver | None = None
+        # False = edit-only agents (`genesis runner start --no-commands`).
+        self.allow_commands = True
+        # True = every claude process runs inside the OS sandbox.
+        self.sandboxed = False
 
     def interrupt(self) -> None:
         if not self.stopping:
@@ -188,7 +201,8 @@ class _Stop:
             self.driver.kill()
 
 
-def start(auto_update: bool = False) -> int:
+def start(auto_update: bool = False, allow_commands: bool = True,
+          sandbox: bool = True) -> int:
     cfg = load_config()
     if not cfg.get("server") or not cfg.get("token"):
         print("error: not connected — run `genesis runner connect --server <URL>` "
@@ -199,18 +213,41 @@ def start(auto_update: bool = False) -> int:
         print(f"error: {detail}", file=sys.stderr)
         return 2
     _say(f"claude CLI: {detail}")
+    from . import sandbox as sandbox_mod
+
+    if sandbox and not sandbox_mod.available():
+        # Fail closed: never quietly run tasks without the containment the
+        # user was promised.
+        print("error: tasks run inside an OS sandbox by default, and none is "
+              "available on this machine.\n"
+              "  Linux: install Bubblewrap (Debian/Ubuntu: `sudo apt install "
+              "bubblewrap`; Fedora: `sudo dnf install bubblewrap`).\n"
+              "  Or start with --no-sandbox to run tasks directly as your "
+              "user — they can then read and write anything you can.",
+              file=sys.stderr)
+        return 2
+    if sandbox:
+        _say(f"sandbox: {sandbox_mod.describe()}")
+    else:
+        _say("sandbox: OFF (--no-sandbox) — tasks run directly as your user "
+             "and can read and write anything you can.")
     try:
-        return asyncio.run(_start(cfg, auto_update=auto_update))
+        return asyncio.run(_start(cfg, auto_update=auto_update,
+                                  allow_commands=allow_commands,
+                                  sandbox=sandbox))
     except KeyboardInterrupt:
         return 0
 
 
-async def _start(cfg: dict, auto_update: bool = False) -> int:
+async def _start(cfg: dict, auto_update: bool = False,
+                 allow_commands: bool = True, sandbox: bool = True) -> int:
     import signal
     import time as _time
 
     client = RunnerClient(cfg["server"], cfg["token"])
     stop = _Stop()
+    stop.allow_commands = allow_commands
+    stop.sandboxed = sandbox
     loop = asyncio.get_running_loop()
     try:
         loop.add_signal_handler(signal.SIGINT, stop.interrupt)
@@ -234,11 +271,15 @@ async def _start(cfg: dict, auto_update: bool = False) -> int:
             # Update handling, BETWEEN items only (never mid-task): with
             # --auto-update, upgrade + re-exec; otherwise an hourly nudge.
             latest = _newer_available(client)
-            if latest and item is None:
+            due = (last_nudge == 0.0
+                   or _time.monotonic() - last_nudge > _NUDGE_EVERY_S)
+            if latest and item is None and due:
                 if auto_update:
-                    _self_update_and_reexec(latest)  # only returns on failure
+                    # Returns only when it could not upgrade; the hourly
+                    # cooldown then applies to retries as well as nudges.
+                    _self_update_and_reexec(latest)
                     last_nudge = _time.monotonic()
-                elif _time.monotonic() - last_nudge > _NUDGE_EVERY_S:
+                else:
                     _say(f"⬆ genesis-cli {latest} is available (you run "
                          f"{own_version() or 'unknown'}) — run "
                          "`genesis runner update`, or start with --auto-update.")
@@ -265,7 +306,8 @@ async def _run_completion_item(client: RunnerClient, item: dict,
     # The server names the model (claude CLI alias — planning defaults to the
     # latest Opus); absent (older server), "opus" rather than the machine's
     # personal claude default.
-    driver = ClaudeDriver(model=str(task.get("model") or "opus"))
+    driver = ClaudeDriver(model=str(task.get("model") or "opus"),
+                          sandboxed=stop.sandboxed, sandbox_root=work_root())
     stop.driver = driver
     try:
         result = await driver.run_completion(
@@ -298,7 +340,13 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
     task = item.get("task") or {}
     task_id = str(task.get("task_id") or "task")
     project = _SAFE_NAME.sub("-", str(task.get("project_name") or "project")) or "project"
-    workdir = work_root() / project / item_id
+    # ONE directory per task, reused across repair rounds: claude keys its
+    # sessions by working directory, so a per-item directory made every
+    # `--resume` fail with "No conversation found" and every repair round die
+    # in a second. The tree itself is replaced each round — the server's
+    # archive is the truth.
+    workdir = work_root() / project / ("task-" + (_SAFE_NAME.sub("-", task_id) or "task"))
+    shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True, exist_ok=True)
     tar_in = workdir.parent / f"{item_id}.in.tar.gz"
     tar_out = None
@@ -312,7 +360,12 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
     # The server names the model (claude CLI alias — builds default to the
     # latest Sonnet); absent (older server), "sonnet" rather than the
     # machine's personal claude default.
-    driver = ClaudeDriver(model=str(task.get("model") or "sonnet"))
+    driver = ClaudeDriver(
+        model=str(task.get("model") or "sonnet"),
+        commands=(allowed_tools(task.get("allowed_commands"))
+                  if stop.allow_commands else None),
+        sandboxed=stop.sandboxed, sandbox_root=workdir.parent,
+    )
     stop.driver = driver
 
     async def flusher() -> None:
@@ -384,3 +437,4 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
         if tar_out is not None:
             tar_out.unlink(missing_ok=True)
         shutil.rmtree(workdir, ignore_errors=True)
+        shutil.rmtree(workdir.parent / (".tmp-" + workdir.name), ignore_errors=True)

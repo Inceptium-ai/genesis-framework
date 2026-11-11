@@ -15,7 +15,9 @@ def _cmd_connect(args: argparse.Namespace) -> int:
 def _cmd_start(args: argparse.Namespace) -> int:
     from .loop import start
 
-    return start(auto_update=args.auto_update)
+    return start(auto_update=args.auto_update,
+                 allow_commands=not args.no_commands,
+                 sandbox=not args.no_sandbox)
 
 
 def _cmd_update(args: argparse.Namespace) -> int:
@@ -56,6 +58,19 @@ def add_runner_parser(sub: argparse._SubParsersAction) -> None:
         "--auto-update", action="store_true",
         help="when the server advertises a newer genesis-cli, upgrade (from "
              "PyPI only) between tasks and restart automatically")
+    start.add_argument(
+        "--no-commands", action="store_true",
+        help="edit-only agents: do not let tasks run build/test commands "
+             "(node, npm, python, pytest, …) on this machine. Default is to "
+             "allow that toolchain set inside the task directory, so agents "
+             "can run the tests they write.")
+    start.add_argument(
+        "--no-sandbox", action="store_true",
+        help="run tasks directly as your user instead of inside the OS "
+             "sandbox. By default each task is contained (macOS Seatbelt / "
+             "Linux Bubblewrap): it can write only its task folder and "
+             "cannot read the rest of your home directory. Without the "
+             "sandbox a task can read and write anything you can.")
     start.set_defaults(func=_cmd_start)
 
     update = rsub.add_parser(

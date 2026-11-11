@@ -136,14 +136,89 @@ def check_cli() -> tuple[bool, str]:
     return True, (proc.stdout or "").strip()
 
 
+_CLI_ALIASES = ("opus", "sonnet", "haiku")
+
+
+def cli_model(model: str | None) -> str | None:
+    """Only names the `claude` CLI accepts reach ``--model``. A provider slug
+    such as ``anthropic/claude-sonnet-4.5`` (sent by a pre-fix server) made
+    the CLI exit in seconds with every task failing; it maps to its family
+    alias here, and anything unrecognizable is dropped so the CLI default
+    runs rather than nothing at all."""
+    m = (model or "").strip().lower()
+    if not m:
+        return None
+    if m in _CLI_ALIASES or ("/" not in m and m.startswith("claude-")):
+        return m
+    for alias in _CLI_ALIASES:
+        if alias in m:
+            return alias
+    return None
+
+
+# Toolchain commands the agent may RUN in the task directory on this machine.
+# Without them the agent can only edit: it ships tests it never executed and
+# the server's validation is its first contact with reality (beta 2026-11-10:
+# an 11-minute task failed on its own untested test helper). Deliberately a
+# build/test/read set — no network fetchers, no docker, no git, no shells.
+RUNNER_COMMANDS = frozenset({
+    "npm", "npx", "pnpm", "yarn", "node",
+    "python", "python3", "pip", "pip3", "uv", "pytest", "ruff",
+    "ls", "cat", "grep", "head", "tail", "wc", "diff", "sort",
+    "mkdir", "touch", "echo", "test",
+})
+
+
+def allowed_tools(server_commands: list | None) -> list[str]:
+    """`--allowedTools` entries: the server's list narrowed to what this
+    machine permits, or the whole runner set when the server names none."""
+    names = {str(c).strip() for c in (server_commands or []) if str(c).strip()}
+    chosen = (names & RUNNER_COMMANDS) if names else set(RUNNER_COMMANDS)
+    return [f"Bash({c}:*)" for c in sorted(chosen)]
+
+
+def _result_error(evt: dict) -> str:
+    """The most specific text a failed result event carries. Some failures
+    (a resume that finds no session) put it in ``errors`` and leave
+    ``result`` empty — which used to surface as the useless 'cli error'."""
+    text = evt.get("result")
+    if not text:
+        errs = evt.get("errors")
+        if isinstance(errs, list) and errs:
+            text = "; ".join(str(e) for e in errs)
+    return str(text or evt.get("subtype") or "cli error")[:500]
+
+
 class ClaudeDriver:
     """One task = one run(). kill() aborts the live subprocess (server-side
     cancel or a second Ctrl-C)."""
 
-    def __init__(self, model: str | None = None):
-        self.model = model
+    def __init__(self, model: str | None = None,
+                 commands: list[str] | None = None,
+                 sandboxed: bool = False, sandbox_root: Path | None = None):
+        self.model = cli_model(model)
+        # `--allowedTools` entries; None/[] = edit-only (--no-commands).
+        self.commands = list(commands or [])
+        # Contain the claude process with the OS sandbox (see sandbox.py).
+        # `sandbox_root` is where private temp dirs are created.
+        self.sandboxed = sandboxed
+        self.sandbox_root = sandbox_root
         self._proc: asyncio.subprocess.Process | None = None
         self.killed = False
+
+    def _contain(self, argv: list[str], workdir: Path) -> tuple[list[str], dict]:
+        """(argv, env) for launching claude — wrapped by the OS sandbox when
+        this driver is sandboxed. Raises SandboxUnavailable instead of ever
+        launching unsandboxed in that case."""
+        env = self._child_env()
+        if not self.sandboxed:
+            return argv, env
+        from .sandbox import Sandbox
+
+        root = self.sandbox_root or Path(workdir).parent
+        box = Sandbox(workdir=Path(workdir),
+                      tmpdir=root / (".tmp-" + Path(workdir).name))
+        return box.wrap(argv), box.env(env)
 
     def kill(self) -> None:
         self.killed = True
@@ -160,7 +235,22 @@ class ClaudeDriver:
                   resume_session: str | None = None,
                   on_text: Callable[[str], None] | None = None) -> dict:
         """Run one task; returns {status, session_id, usage, error} parsed
-        from the CLI's final result message."""
+        from the CLI's final result message. A resume the CLI cannot honor
+        (its sessions are keyed by directory and machine) degrades to a fresh
+        session with the same prompt instead of failing the round."""
+        result = await self._run_once(prompt, workdir=workdir,
+                                      resume_session=resume_session,
+                                      on_text=on_text)
+        if (resume_session and not self.killed
+                and result.get("status") == "failed"
+                and "no conversation found" in (result.get("error") or "").lower()):
+            result = await self._run_once(prompt, workdir=workdir,
+                                          resume_session=None, on_text=on_text)
+        return result
+
+    async def _run_once(self, prompt: str, *, workdir: Path,
+                        resume_session: str | None = None,
+                        on_text: Callable[[str], None] | None = None) -> dict:
         started = time.monotonic()
         argv = [
             "claude", "-p", prompt,
@@ -173,12 +263,22 @@ class ClaudeDriver:
             argv += ["--model", self.model]
         if resume_session:
             argv += ["--resume", resume_session]
+        if self.commands:
+            argv += ["--allowedTools", *self.commands]
 
+        from .sandbox import SandboxUnavailable
+
+        try:
+            argv, env = self._contain(argv, workdir)
+        except SandboxUnavailable as exc:
+            # Fail closed: a task that was to run sandboxed never runs bare.
+            return {"status": "failed", "session_id": None, "usage": {},
+                    "error": f"sandbox unavailable — task not run: {exc}"}
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=str(workdir),
-                env=self._child_env(),
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=_STREAM_LIMIT,
@@ -219,7 +319,7 @@ class ClaudeDriver:
                     usage["output_tokens"] = int(u.get("output_tokens", 0))
                     status = "completed" if evt.get("subtype") == "success" else "failed"
                     if evt.get("is_error"):
-                        error = str(evt.get("result", "cli error"))[:500]
+                        error = _result_error(evt)
             await proc.wait()
         except asyncio.CancelledError:
             proc.kill()
@@ -269,11 +369,18 @@ class ClaudeDriver:
 
         usage: dict = {"input_tokens": 0, "output_tokens": 0, "duration_s": None}
         with tempfile.TemporaryDirectory(prefix="genesis-completion-") as empty:
+            from .sandbox import SandboxUnavailable
+
+            try:
+                argv, env = self._contain(argv, Path(empty))
+            except SandboxUnavailable as exc:
+                return {"status": "failed", "text": None, "usage": usage,
+                        "error": f"sandbox unavailable — call not run: {exc}"}
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
                     cwd=empty,
-                    env=self._child_env(),
+                    env=env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     limit=_STREAM_LIMIT,
