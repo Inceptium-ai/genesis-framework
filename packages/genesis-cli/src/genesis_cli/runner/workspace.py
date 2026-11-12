@@ -3,8 +3,9 @@
 The server's archive is data from a machine seam — extraction validates every
 member (relative, no '..', regular files only) and uses the tarfile "data"
 filter. The change manifest (sha256 per file) brackets the agent run; the
-diff decides what goes back up. The same exclusion set applies in every
-direction: VCS internals, dependency trees, caches, env files.
+diff decides what goes back up. VCS internals, dependency trees and env
+files never travel; build output does not go back — unless the directory it
+sits in is one the server shipped source in (see ``shipped_dirs``).
 """
 
 from __future__ import annotations
@@ -14,17 +15,42 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
-_EXCLUDE_DIRS = {".git", "node_modules", ".genesis-work", "__pycache__",
-                 ".venv", "dist", "build"}
+# Never part of a task in either direction.
+_EXCLUDE_DIRS = {".git", "node_modules", ".genesis-work"}
+# Names that USUALLY hold output a command produced during the task (a
+# bundle, bytecode, a virtualenv) — not sent back. But a project may keep
+# real source under one of these names: an app whose bundler lives in
+# `build/build.mjs` had every edit to it silently dropped, so two runs in a
+# row "passed" on the runner and failed the server's checks. The rule is
+# therefore about where the files CAME from, not what the directory is
+# called: a directory the server shipped files in is source.
+_OUTPUT_DIRS = {"dist", "build", "__pycache__", ".venv"}
 
 
 class ExtractError(ValueError):
     """An archive member tried to escape or smuggle a non-file."""
 
 
-def _excluded(rel: str) -> bool:
+def shipped_dirs(names: list[str]) -> frozenset[str]:
+    """Output-named directories the server's archive contains files in —
+    these are source for this task, and changes under them go back."""
+    keep: set[str] = set()
+    for name in names:
+        parts = PurePosixPath(name).parts
+        for i, part in enumerate(parts[:-1]):
+            if part in _OUTPUT_DIRS:
+                keep.add("/".join(parts[:i + 1]))
+    return frozenset(keep)
+
+
+def _excluded(rel: str, keep: frozenset[str] = frozenset()) -> bool:
     parts = PurePosixPath(rel).parts
-    return any(p in _EXCLUDE_DIRS or p.startswith(".env") for p in parts)
+    for i, p in enumerate(parts):
+        if p in _EXCLUDE_DIRS or p.startswith(".env"):
+            return True
+        if p in _OUTPUT_DIRS and "/".join(parts[:i + 1]) not in keep:
+            return True
+    return False
 
 
 def safe_extract(tar_path: Path, dest: Path) -> list[str]:
@@ -45,15 +71,16 @@ def safe_extract(tar_path: Path, dest: Path) -> list[str]:
     return names
 
 
-def manifest(dest: Path) -> dict[str, str]:
+def manifest(dest: Path, keep: frozenset[str] = frozenset()) -> dict[str, str]:
     """sha256 per file under dest, excluded trees skipped — the before/after
-    bracket around a task run."""
+    bracket around a task run. ``keep`` is :func:`shipped_dirs` of the
+    archive this workspace was extracted from."""
     out: dict[str, str] = {}
     for path in sorted(dest.rglob("*")):
         if not path.is_file() or path.is_symlink():
             continue
         rel = path.relative_to(dest).as_posix()
-        if _excluded(rel):
+        if _excluded(rel, keep):
             continue
         h = hashlib.sha256()
         try:
@@ -73,14 +100,15 @@ def diff(before: dict[str, str], after: dict[str, str]) -> tuple[list[str], list
     return sorted(changed), sorted(deleted)
 
 
-def build_result_tar(dest: Path, changed: list[str]) -> Path:
+def build_result_tar(dest: Path, changed: list[str],
+                     keep: frozenset[str] = frozenset()) -> Path:
     """tar.gz of the changed files (relative to dest) in a temp file the
     caller uploads then deletes. Excluded paths never ride along."""
     fd = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
     tar_path = Path(fd.name)
     with tarfile.open(fileobj=fd, mode="w:gz") as tar:
         for rel in changed:
-            if _excluded(rel):
+            if _excluded(rel, keep):
                 continue
             full = dest / rel
             if not full.is_file() or full.is_symlink():

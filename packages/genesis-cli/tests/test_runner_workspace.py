@@ -101,3 +101,43 @@ def test_result_tar_excludes_protected_paths(tmp_path):
             assert [m.name for m in tar.getmembers()] == ["good.txt"]
     finally:
         tar_path.unlink()
+
+
+def test_source_kept_under_an_output_named_directory_goes_back(tmp_path):
+    """A project that keeps real source in `build/` (a bundler script) had
+    every edit to it dropped: the directory NAME was excluded. What matters
+    is whether the server shipped files there."""
+    from genesis_cli.runner.workspace import shipped_dirs
+
+    shipped = ["app/index.html", "build/build.mjs", "tools/build/gen.py"]
+    keep = shipped_dirs(shipped)
+    assert keep == {"build", "tools/build"}
+
+    for rel in shipped:
+        f = tmp_path / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("v1")
+    before = manifest(tmp_path, keep)
+    assert "build/build.mjs" in before
+
+    (tmp_path / "build" / "build.mjs").write_text("v2")          # source edit
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "runway.html").write_text("bundle")     # output: not shipped
+    (tmp_path / "app" / "build").mkdir()
+    (tmp_path / "app" / "build" / "out.js").write_text("output") # another build/, not shipped
+    (tmp_path / "node_modules" / "x").mkdir(parents=True)
+    (tmp_path / "node_modules" / "x" / "i.js").write_text("dep")
+    changed, deleted = diff(before, manifest(tmp_path, keep))
+    assert changed == ["build/build.mjs"] and deleted == []
+
+    tar_path = build_result_tar(
+        tmp_path, [*changed, "dist/runway.html", "app/build/out.js"], keep)
+    with tarfile.open(tar_path) as tar:
+        assert tar.getnames() == ["build/build.mjs"]
+
+    # Deleting a shipped file under build/ is reported too.
+    (tmp_path / "tools" / "build" / "gen.py").unlink()
+    _, deleted = diff(before, manifest(tmp_path, keep))
+    assert deleted == ["tools/build/gen.py"]
+    # With nothing shipped there, build/ is still treated as output.
+    assert "build/build.mjs" not in manifest(tmp_path)

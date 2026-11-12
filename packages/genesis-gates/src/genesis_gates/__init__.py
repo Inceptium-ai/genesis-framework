@@ -28,7 +28,7 @@ from .engine.provider import (
 from .engine.registry import GATE_REGISTRY, get_gate, register_gate
 from .engine.runner import EvidencePackage, GateRunner
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 __all__ = [
     "Gate",

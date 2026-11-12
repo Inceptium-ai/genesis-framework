@@ -22,7 +22,7 @@ import httpx
 from .claude_driver import ClaudeDriver, allowed_tools, check_cli
 from .client import RunnerAuthError, RunnerClient, own_version
 from .config import config_path, load_config, save_config, work_root
-from .workspace import build_result_tar, diff, manifest, safe_extract
+from .workspace import build_result_tar, diff, manifest, safe_extract, shipped_dirs
 
 _EVENT_FLUSH_S = 1.0
 _CLAIM_BACKOFF_S = 5.0
@@ -384,8 +384,8 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
 
     try:
         await client.download_workspace(item_id, tar_in)
-        safe_extract(tar_in, workdir)
-        before = manifest(workdir)
+        keep = shipped_dirs(safe_extract(tar_in, workdir))
+        before = manifest(workdir, keep)
 
         flush_task = asyncio.create_task(flusher())
         try:
@@ -405,7 +405,7 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
                 pass
             events.clear()
 
-        after = manifest(workdir)
+        after = manifest(workdir, keep)
         changed, deleted = diff(before, after)
         payload = {
             "status": result.get("status", "failed"),
@@ -415,7 +415,7 @@ async def _run_item(client: RunnerClient, item: dict, stop: _Stop) -> None:
             "deleted": deleted,
         }
         if changed:
-            tar_out = build_result_tar(workdir, changed)
+            tar_out = build_result_tar(workdir, changed, keep)
         await client.post_result(item_id, payload, tar_out)
         _say(f"✓ {task_id}: {payload['status']} "
              f"({len(changed)} changed, {len(deleted)} deleted)")

@@ -11,6 +11,19 @@ PyPI (see `.github/workflows/release.yml`).
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-11-12
+
+### Fixed
+
+- **Runner dropped every change under a directory named `build/` or
+  `dist/`.** The runner excluded those names when deciding which files to
+  send back, on the assumption that they hold build output. A project that
+  keeps real source there (a bundler script in `build/build.mjs`) had its
+  edits silently discarded: the task passed on the runner and failed the
+  server's checks. The rule is now about where files came from: a directory
+  the server shipped files in is source, and changes under it go back;
+  output a command creates during the task is still left behind.
+
 ## [0.3.0] — 2026-10-31
 
 ### Added
